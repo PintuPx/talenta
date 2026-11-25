@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PLACEHOLDER colorful wallet art (ic_wallet_3q); replace with final branding. Content stays inside the 66dp adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="@color/wallet_note" android:pathData="M32,52L36,34L54,37L50,52z" />
+    <path android:fillColor="@color/wallet_note" android:pathData="M60,52L64,37L80,34L78,52z" />
+    <path android:fillColor="@color/wallet_note_light" android:pathData="M45,52L45,28L65,28L65,52z" />
+    <path
+        android:fillColor="@color/wallet_body"
+        android:pathData="M32,46h44a6,6 0,0 1,6 6v24a6,6 0,0 1,-6 6h-44a6,6 0,0 1,-6 -6v-24a6,6 0,0 1,6 -6z" />
+    <path
+        android:fillColor="@color/wallet_clasp"
+        android:pathData="M60,58h20a4,4 0,0 1,4 4v6a4,4 0,0 1,-4 4h-20a6,6 0,0 1,-6 -6v-2a6,6 0,0 1,6 -6z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M62,62.5a2.5,2.5 0,1 0,0.01 0z" />
+</vector>

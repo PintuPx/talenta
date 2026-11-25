@@ -1,0 +1,35 @@
+*.iml
+.gradle/
+.kotlin/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+# Signing material and secrets must never be committed
+*.jks
+*.keystore
+keystore.properties
+/app/release/
+*.p12
+*.pem
+google-services.json
+.env
+*.env
+
+# AI-assisted development files (prompts, agent definitions, guardrails for assistants) stay private
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+.claude/
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
+/prompts/
+
+# Local tooling
+/app/schemas/*/*.json.bak
+*.log

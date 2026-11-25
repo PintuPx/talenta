@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Privacy: the app declares NO dangerous permissions and NO network access.
+  - INTERNET / ACCESS_NETWORK_STATE are added by Google ML Kit's usage-statistics library and are
+    explicitly REMOVED below, together with that library's upload backend. Bill text is recognised
+    by ML Kit's bundled on-device model, which needs no network.
+  - Bill photos are taken by the user's camera app (ACTION_IMAGE_CAPTURE) or picked with the system
+    photo picker, so no CAMERA or storage permission is required.
+  - Android cloud auto-backup is disabled so financial records are never copied off-device without
+    the user's explicit action (manual export).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+
+    <application
+        android:name=".HomeBudgetApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.HomeBudget"
+        tools:targetApi="36">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!--
+          One launcher entry per wallet level; LauncherIconSwitcher enables exactly one of them so the app
+          icon follows the monthly budget. Only the "full" alias is enabled by default.
+        -->
+        <activity-alias
+            android:name=".LauncherIconFull"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherIconThreeQuarters"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_3q"
+            android:roundIcon="@mipmap/ic_launcher_3q"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherIconHalf"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_half"
+            android:roundIcon="@mipmap/ic_launcher_half"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherIconLow"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_low"
+            android:roundIcon="@mipmap/ic_launcher_low"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherIconEmpty"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_empty"
+            android:roundIcon="@mipmap/ic_launcher_empty"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".LauncherIconOver"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_over"
+            android:roundIcon="@mipmap/ic_launcher_over"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Home-screen widget: exported because the launcher must be able to send it APPWIDGET_UPDATE. -->
+        <receiver
+            android:name=".ui.wallet.WalletWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/wallet_widget_info" />
+        </receiver>
+
+        <!-- Gives the camera app a one-time write URI for the bill photo (app cache, not shared storage). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- ML Kit usage-statistics upload backend: removed so nothing is ever sent. -->
+        <service
+            android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
+            tools:node="remove" />
+    </application>
+</manifest>

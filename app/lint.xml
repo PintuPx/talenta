@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- targetSdk 36 is deliberate: it satisfies Google Play's requirement (API 36+ since 31 Aug 2026).
+         Moving to 37 adopts Android 17 behavior changes and must be verified on an Android 17 device first. -->
+    <issue id="OldTargetApi" severity="ignore" />
+    <!-- Gradle 9.8.2 is pinned deliberately (newer 9.9.x releases were days old when chosen). -->
+    <issue id="AndroidGradlePluginVersion" severity="ignore" />
+    <issue id="GradleDependency" severity="informational" />
+    <!-- The adaptive icon must stay in -v26: moving it to mipmap-anydpi makes AAPT version it to v33
+         (because of the monochrome layer), leaving no launcher icon on API 26-32. -->
+    <issue id="ObsoleteSdkInt">
+        <ignore path="src/main/res/mipmap-anydpi-v26" />
+    </issue>
+</lint>

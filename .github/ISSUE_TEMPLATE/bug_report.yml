@@ -1,0 +1,38 @@
+name: Bug report
+description: Something doesn't work or the app crashed
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Please do not include amounts, notes, payees, bill photos or other personal data.**
+        If the app crashed, open it again and tap **Report on GitHub** in the crash dialog to fill in the report.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Settings → Privacy & about → Version
+      placeholder: "0.1.1 (2)"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone and Android version
+      placeholder: "Pixel 7, Android 15"
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you tap, and what happened?
+      placeholder: "1. Home → Scan bill → Choose a photo\n2. Picked a bill photo\n3. The app closed"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+  - type: textarea
+    id: report
+    attributes:
+      label: Crash report (if any)
+      render: text

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PLACEHOLDER launcher icon (full wallet). Replace with the supplied brand icon before release. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/wallet_icon_background" />
+    <foreground android:drawable="@drawable/ic_wallet_full" />
+    <monochrome android:drawable="@drawable/ic_wallet_mono" />
+</adaptive-icon>

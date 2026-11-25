@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Temporary camera captures only; photos are moved into private files/bills/ right after. -->
+    <cache-path name="capture" path="capture/" />
+</paths>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome (themed icon) silhouette of the wallet. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M45,52L45,24L65,24L65,52zM32,46h44a6,6 0,0 1,6 6v24a6,6 0,0 1,-6 6h-44a6,6 0,0 1,-6 -6v-24a6,6 0,0 1,6 -6zM60,58h20a4,4 0,0 1,4 4v6a4,4 0,0 1,-4 4h-20a6,6 0,0 1,-6 -6v-2a6,6 0,0 1,6 -6z" />
+</vector>

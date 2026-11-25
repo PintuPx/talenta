@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- PLACEHOLDER brand colors. Replace with the supplied brand palette (see docs/BRANDING.md). -->
+    <color name="placeholder_background">#FFF8F9FA</color>
+    <color name="placeholder_background_dark">#FF121417</color>
+
+    <!-- PLACEHOLDER wallet icon colors (launcher icon, in-app wallet and widget). -->
+    <color name="wallet_icon_background">#FFE3F2FD</color>
+    <color name="wallet_body">#FFFF7043</color>
+    <color name="wallet_body_over">#FFD32F2F</color>
+    <color name="wallet_clasp">#FFE64A19</color>
+    <color name="wallet_clasp_over">#FFB71C1C</color>
+    <color name="wallet_note">#FF43A047</color>
+    <color name="wallet_note_light">#FF66BB6A</color>
+    <color name="wallet_note_amber">#FFFFB300</color>
+    <color name="wallet_slot">#FF8D3A1E</color>
+
+    <!-- Home-screen widget -->
+    <color name="widget_background">#FFFFFFFF</color>
+    <color name="widget_text">#FF1C1B1F</color>
+    <color name="widget_text_secondary">#FF49454F</color>
+</resources>
