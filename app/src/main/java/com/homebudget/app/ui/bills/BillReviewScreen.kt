@@ -20,8 +20,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -46,6 +48,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -72,11 +75,13 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -86,6 +91,9 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.homebudget.app.data.bill.BillImageStore
 import com.homebudget.app.domain.model.Category
+import com.homebudget.app.domain.bill.BillTextSelection
+import com.homebudget.app.domain.money.Money
+import com.homebudget.app.domain.bill.SensitiveInfo
 import com.homebudget.app.ui.common.CategoryBadge
 import com.homebudget.app.ui.common.CategoryIcons
 import com.homebudget.app.ui.common.CategorySheet
@@ -112,6 +120,7 @@ private sealed interface ReviewDialog {
     data object ReRead : ReviewDialog
     data object Discard : ReviewDialog
     data object Photo : ReviewDialog
+    data class BillText(val selectedItemKey: Long?) : ReviewDialog
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -238,13 +247,89 @@ fun BillReviewScreen(
             },
         )
         ReviewDialog.Photo -> state.imageFile?.let { PhotoViewer(it, vm.images) { dialog = null } }
+        is ReviewDialog.BillText -> {
+            val text = state.ocrText
+            if (text.isNullOrBlank()) {
+                dialog = null
+            } else {
+                BillTextPickerSheet(
+                    text = text,
+                    selectedItemKey = d.selectedItemKey,
+                    fractionDigits = state.fractionDigits,
+                    onUseShopName = { vm.setMerchant(it); dialog = null },
+                    onUseItemName = { key, value -> vm.setDescription(key, value); dialog = null },
+                    onUseAmount = { key, minor -> vm.setAmount(key, Money.toEditableText(minor)); dialog = null },
+                    onDismiss = { dialog = null },
+                )
+            }
+        }
         null -> Unit
+    }
+
+    state.pendingCategoryChange?.let { change ->
+        val learnedGroup = state.categoriesById[change.learnedCategoryId]?.name ?: "another group"
+        AlertDialog(
+            onDismissRequest = vm::cancelCategoryChange,
+            title = { Text("Change category?") },
+            text = { Text("${change.itemDescription} is currently $learnedGroup.") },
+            confirmButton = {
+                Row {
+                    TextButton(
+                        onClick = { vm.resolveCategoryChange(always = false) },
+                        enabled = !state.saving,
+                    ) {
+                        Text("Only this time")
+                    }
+                    TextButton(
+                        onClick = { vm.resolveCategoryChange(always = true) },
+                        enabled = !state.saving,
+                    ) {
+                        Text("Always")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::cancelCategoryChange, enabled = !state.saving) { Text("Cancel") }
+            },
+        )
+    }
+
+    state.pendingPastCategoryChange?.let { change ->
+        val previousGroup = state.categoriesById[change.previousCategoryId]?.name ?: "the current group"
+        val newGroup = state.categoriesById[change.categoryId]?.name ?: "the new group"
+        AlertDialog(
+            onDismissRequest = vm::cancelPastCategoryChange,
+            title = { Text("Change past entries too?") },
+            text = {
+                Text(
+                    "${change.foundEntries} past entries for ${change.itemDescription} use $previousGroup. " +
+                        "Change them to $newGroup as well?",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = vm::resolvePastCategoryChange,
+                    enabled = !state.saving,
+                ) {
+                    Text("Change past entries too")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = vm::cancelPastCategoryChange,
+                    enabled = !state.saving,
+                ) {
+                    Text("Not now")
+                }
+            },
+        )
     }
 }
 
 @Composable
 private fun ReviewContent(state: BillReviewState, vm: BillReviewViewModel, onDialog: (ReviewDialog) -> Unit, modifier: Modifier) {
     val categories = state.categoriesById
+    var selectedLineKey by remember { mutableStateOf(state.lines.firstOrNull { it.included }?.key) }
     LazyColumn(
         modifier.imePadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
@@ -253,6 +338,41 @@ private fun ReviewContent(state: BillReviewState, vm: BillReviewViewModel, onDia
         item { PhotoCard(state, vm.images, onOpenPhoto = { onDialog(ReviewDialog.Photo) }, onRead = {
             if (state.lines.isEmpty()) vm.readText() else onDialog(ReviewDialog.ReRead)
         }) }
+
+        if (state.sensitiveKinds.isNotEmpty()) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.ErrorOutline,
+                            contentDescription = "Sensitive information warning",
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                        Text(
+                            "This photo seems to show ${SensitiveInfo.describe(state.sensitiveKinds)}. Consider retaking it without that.",
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (state.ocrText?.isNotBlank() == true) {
+            item {
+                OutlinedButton(
+                    onClick = { onDialog(ReviewDialog.BillText(selectedLineKey)) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Bill text")
+                }
+            }
+        }
 
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -335,6 +455,7 @@ private fun ReviewContent(state: BillReviewState, vm: BillReviewViewModel, onDia
                 onIncluded = { vm.setIncluded(line.key, it) },
                 onPickCategory = { onDialog(ReviewDialog.Category(line.key)) },
                 onRemove = { vm.removeLine(line.key) },
+                onSelect = { selectedLineKey = line.key },
             )
         }
 
@@ -406,12 +527,14 @@ private fun LineCard(
     onIncluded: (Boolean) -> Unit,
     onPickCategory: () -> Unit,
     onRemove: () -> Unit,
+    onSelect: () -> Unit,
 ) {
     val category = line.categoryId?.let(categories::get)
     val main = category?.parentId?.let(categories::get) ?: category
     val group = category?.takeIf { it.parentId != null }
     val contentAlpha = if (line.included) 1f else 0.5f
     Card(
+        onClick = onSelect,
         modifier = Modifier.testTag("bill-line"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
@@ -557,15 +680,107 @@ private fun SplitCard(state: BillReviewState) {
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
+internal fun BillTextPickerSheet(
+    text: String,
+    selectedItemKey: Long?,
+    fractionDigits: Int,
+    onUseShopName: (String) -> Unit,
+    onUseItemName: (Long, String) -> Unit,
+    onUseAmount: (Long, Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selectedLine by remember { mutableStateOf<String?>(null) }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.navigationBarsPadding().padding(bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Bill text",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            val lines = BillTextSelection.splitLines(text)
+            if (lines.isEmpty()) {
+                Text(
+                    "No recognised text is available.",
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            } else {
+                LazyColumn(modifier = Modifier.height(280.dp)) {
+                    itemsIndexed(lines) { index, line ->
+                        TextButton(
+                            onClick = { selectedLine = line },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("bill-text-line-$index"),
+                        ) {
+                            Text(line, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            }
+            selectedLine?.let { line ->
+                HorizontalDivider()
+                Column(
+                    Modifier.padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(line, style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { onUseShopName(line) }) {
+                        Text("Use as shop name")
+                    }
+                    if (selectedItemKey != null) {
+                        TextButton(onClick = { onUseItemName(selectedItemKey, line) }) {
+                            Text("Use as item name")
+                        }
+                        BillTextSelection.extractAmountMinor(line, fractionDigits)?.let { minor ->
+                            TextButton(onClick = { onUseAmount(selectedItemKey, minor) }) {
+                                Text("Use as amount")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun OcrTextSection(text: String) {
     var expanded by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
     Column {
-        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide text read from the bill" else "Show text read from the bill") }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Hide text read from the bill" else "Show text read from the bill")
+            }
+            if (expanded) {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) {
+                    Text("Copy all")
+                }
+            }
+        }
         if (expanded) {
+            SelectionContainer {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
+                        .padding(12.dp)
+                        .testTag("ocr-text"),
+                )
+            }
             Text(
-                text,
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp),
+                "Long-press the text to select and copy part of it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
             )
         }
     }

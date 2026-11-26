@@ -42,6 +42,8 @@ class SettingsViewModel @Inject constructor(
 
     fun setCurrency(code: String) = viewModelScope.launch { settingsRepository.setCurrency(code) }
     fun setTheme(mode: ThemeMode) = viewModelScope.launch { settingsRepository.setThemeMode(mode) }
+    fun setPrivateMode(enabled: Boolean) = viewModelScope.launch { settingsRepository.setPrivateMode(enabled) }
+    fun setAskForDeviceLock(enabled: Boolean) = viewModelScope.launch { settingsRepository.setAskForDeviceLock(enabled) }
 
     fun export(uri: String) = runBusy {
         try {
@@ -72,7 +74,7 @@ class SettingsViewModel @Inject constructor(
                 val s = backupRepository.restore(pending.file)
                 messages.show("Restored ${s.transactions} transactions, ${s.accounts} accounts")
             } catch (e: Exception) {
-                messages.show("Restore failed. Your existing data was not changed.")
+                messages.show("Restore failed: ${e.message ?: "your existing data was not changed"}")
             }
         }
     }

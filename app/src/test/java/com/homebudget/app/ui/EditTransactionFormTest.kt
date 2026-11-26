@@ -4,10 +4,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onParent
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
@@ -24,6 +28,7 @@ import com.homebudget.app.domain.validation.ValidationResult
 import com.homebudget.app.ui.edit.EditFormActions
 import com.homebudget.app.ui.edit.EditFormState
 import com.homebudget.app.ui.edit.EditTransactionForm
+import com.homebudget.app.ui.edit.suggestPayees
 import com.homebudget.app.ui.theme.AppTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -39,6 +44,46 @@ class EditTransactionFormTest {
     private val cash = Account(1, "Cash", AccountType.CASH)
     private val bank = Account(2, "Bank", AccountType.CREDIT_CARD)
     private val food = Category(10, "Groceries", CategoryKind.EXPENSE, "groceries", 0xFF2E7D32)
+
+    @Test
+    fun payeeSuggestionsFilterCaseInsensitivelyAndHideExactMatch() {
+        val suggestions = suggestPayees(listOf("Fresh Mart", "Fresh & Easy", "Bakery"), "fr")
+
+        assertEquals(listOf("Fresh Mart", "Fresh & Easy"), suggestions)
+        assertEquals(emptyList<String>(), suggestPayees(suggestions, "fresh mart"))
+    }
+
+    @Test
+    fun payeeSuggestionChipFillsTheField() {
+        compose.setContent {
+            var state by remember {
+                mutableStateOf(
+                    EditFormState(
+                        loading = false,
+                        accountId = 1,
+                        allAccounts = listOf(cash),
+                        allCategories = listOf(food),
+                        payeeSuggestions = listOf("Fresh Mart"),
+                    )
+                )
+            }
+            AppTheme {
+                EditTransactionForm(
+                    state = state,
+                    actions = EditFormActions(onPayee = { state = state.copy(payee = it) }),
+                )
+            }
+        }
+
+        // The form is taller than the Robolectric viewport, so bring each node into view first.
+        // performScrollTo only scrolls the closest scrollable parent. For the chip that is the
+        // horizontal suggestion row, so scroll that row into view in the form's vertical scroll first.
+        val chip = compose.onNodeWithText("Fresh Mart")
+        chip.onParent().assert(hasScrollAction()).performScrollTo()
+        chip.performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("payee").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("payee").assertTextContains("Fresh Mart")
+    }
 
     @Test
     fun saveWithEmptyFormShowsValidationErrorsAndValidInputSaves() {

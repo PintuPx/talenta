@@ -126,6 +126,23 @@ object FinanceRules {
         return PeriodSummary(income, expense, refunds)
     }
 
+    /** Deposits from non-investment accounts into investments; transfers between investments are ignored. */
+    fun investedThisPeriod(
+        transactions: List<Transaction>,
+        investmentAccountIds: Set<Long>,
+        range: DateRange,
+    ): Long = transactions.sumOf { transaction ->
+        if (transaction.type == TransactionType.TRANSFER &&
+            transaction.occurredAt in range &&
+            transaction.toAccountId?.let { it in investmentAccountIds } == true &&
+            transaction.accountId !in investmentAccountIds
+        ) {
+            transaction.amount
+        } else {
+            0L
+        }
+    }
+
     /**
      * Net spending per expense category in [range] (expenses minus refunds), largest first.
      * Categories whose refunds equal or exceed their expenses are omitted.
@@ -174,4 +191,11 @@ object FinanceRules {
         TransactionType.EXPENSE -> if (t.isRefund) t.amount else -t.amount
         TransactionType.TRANSFER -> 0
     }
+
+    /**
+     * Investment gain (positive) or loss (negative): the latest recorded current value minus the
+     * money put in, where [contributions] is the account's ledger balance (opening balance plus
+     * transfers in minus transfers out). Both are bounded by Money.MAX_AMOUNT, so this cannot overflow.
+     */
+    fun investmentGain(currentValue: Long, contributions: Long): Long = currentValue - contributions
 }

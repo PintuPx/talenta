@@ -6,13 +6,22 @@ import com.homebudget.app.data.repository.AccountRepository
 import com.homebudget.app.data.repository.CategoryRepository
 import com.homebudget.app.data.repository.PurchaseRepository
 import com.homebudget.app.data.repository.TransactionRepository
+import com.homebudget.app.data.settings.Space
+import com.homebudget.app.data.settings.SpaceProvider
 import com.homebudget.app.data.settings.SettingsRepository
+import com.homebudget.app.domain.family.ExpenseFamilyRepository
+import com.homebudget.app.domain.family.ExpensePerson
+import com.homebudget.app.domain.family.ExpenseTag
+import com.homebudget.app.domain.family.FamilyReportFilter
+import com.homebudget.app.domain.family.ReportAllocation
 import com.homebudget.app.domain.backup.BackupStorage
 import com.homebudget.app.domain.export.CsvExporter
 import com.homebudget.app.domain.finance.DateRange
 import com.homebudget.app.domain.finance.FinanceRules
 import com.homebudget.app.domain.finance.PeriodSummary
 import com.homebudget.app.domain.model.Category
+import com.homebudget.app.domain.model.Account
+import com.homebudget.app.domain.model.AccountType
 import com.homebudget.app.domain.model.Transaction
 import com.homebudget.app.domain.model.mainGroupId
 import com.homebudget.app.domain.report.ItemPriceHistory
@@ -26,6 +35,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -45,6 +55,7 @@ data class ReportSelection(
     val itemQuery: String = "",
     val selectedItemKey: String? = null,
     val pricePointSelected: Int? = null,
+    val familyFilter: FamilyReportFilter = FamilyReportFilter.None,
 )
 
 data class SpendShare(val categoryId: Long?, val category: Category?, val label: String, val amount: Long, val share: Float, val hasGroups: Boolean)
@@ -66,6 +77,10 @@ data class ReportsUiState(
     val items: List<ItemPriceHistory> = emptyList(),
     val selectedItem: ItemPriceHistory? = null,
     val periodTransactionCount: Int = 0,
+    val familyPeople: List<ExpensePerson> = emptyList(),
+    val familyTags: List<ExpenseTag> = emptyList(),
+    val investedThisPeriodMinor: Long = 0,
+    val investmentAccountCount: Int = 0,
 )
 
 @HiltViewModel
@@ -77,16 +92,52 @@ class ReportsViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val storage: BackupStorage,
     private val messages: UserMessages,
+    private val expenseFamily: ExpenseFamilyRepository,
+    private val spaceProvider: SpaceProvider,
 ) : ViewModel() {
 
     private val selection = MutableStateFlow(ReportSelection())
 
-    val state: StateFlow<ReportsUiState> = combine(
+    private data class ReportInputs(
+        val selection: ReportSelection,
+        val transactions: List<Transaction>,
+        val categories: List<Category>,
+        val priceLines: List<com.homebudget.app.domain.report.PurchasedLine>,
+        val privateSpace: Boolean,
+        val accounts: List<Account> = emptyList(),
+    )
+
+    private val baseInputs = combine(
         selection,
         transactionRepository.observeAll(),
         categoryRepository.observeCategories(),
         purchases.observePurchasedLines(),
-    ) { sel, txns, cats, lines -> build(sel, txns, cats, PriceHistory.build(lines)) }
+        spaceProvider.current,
+    ) { sel, txns, cats, lines, space ->
+        ReportInputs(sel, txns, cats, lines, space == Space.PRIVATE)
+    }
+    private val inputs = combine(baseInputs, accountRepository.observeAccounts()) { input, accounts ->
+        input.copy(accounts = accounts)
+    }
+
+    val state: StateFlow<ReportsUiState> = inputs.flatMapLatest { input ->
+        combine(
+            expenseFamily.observeReportAllocations(input.selection.familyFilter, input.privateSpace),
+            expenseFamily.observeAllPeople(),
+            expenseFamily.observeActiveTags(),
+        ) { allocations, people, tags ->
+            build(
+                input.selection,
+                input.transactions,
+                input.categories,
+                PriceHistory.build(input.priceLines),
+                allocations,
+                people,
+                tags,
+                input.accounts,
+            )
+        }
+    }
         .catch { emit(ReportsUiState(loading = false, error = "Could not load reports")) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReportsUiState())
 
@@ -98,11 +149,31 @@ class ReportsViewModel @Inject constructor(
         )
     }
 
-    private fun build(sel: ReportSelection, txns: List<Transaction>, cats: List<Category>, items: List<ItemPriceHistory>): ReportsUiState {
+    private fun build(
+        sel: ReportSelection,
+        txns: List<Transaction>,
+        cats: List<Category>,
+        items: List<ItemPriceHistory>,
+        allocations: List<ReportAllocation>,
+        people: List<ExpensePerson>,
+        tags: List<ExpenseTag>,
+        accounts: List<Account>,
+    ): ReportsUiState {
+        val filteredTransactions = if (sel.familyFilter == FamilyReportFilter.None) {
+            txns
+        } else {
+            val amounts = allocations.associate { it.transactionId to it.amount }
+            txns.mapNotNull { transaction ->
+                amounts[transaction.id]?.let { amount -> transaction.copy(amount = amount) }
+            }
+        }
         val byId = cats.associateBy { it.id }
         val rollUp: (Long?) -> Long? = { byId.mainGroupId(it) }
         val range = rangeOf(sel)
-        val summary = FinanceRules.summarize(txns, range)
+        val investmentAccountIds = accounts
+            .filter { it.type == AccountType.INVESTMENT }
+            .mapTo(HashSet()) { it.id }
+        val summary = FinanceRules.summarize(filteredTransactions, range)
         val previousRange = when (sel.period) {
             ReportPeriod.MONTH -> DateRange.month(sel.month.minusMonths(1))
             ReportPeriod.YEAR -> DateRange(range.start.minusYears(1), range.start)
@@ -111,13 +182,13 @@ class ReportsViewModel @Inject constructor(
             ReportPeriod.MONTH -> Reports.monthsEnding(sel.month, 6)
             ReportPeriod.YEAR -> Reports.monthsOf(sel.month.year)
         }
-        val trend = Reports.monthlyTotals(txns, trendMonths)
+        val trend = Reports.monthlyTotals(filteredTransactions, trendMonths)
         val active = trend.filter { it.income != 0L || it.expense != 0L }
 
         val parents = cats.mapNotNullTo(HashSet()) { it.parentId }
         val drill = sel.drillMainGroupId?.takeIf { byId.containsKey(it) }
-        val spends = if (drill == null) FinanceRules.spendingByCategory(txns, range, rollUp)
-        else Reports.spendingWithin(txns, range, drill, rollUp)
+        val spends = if (drill == null) FinanceRules.spendingByCategory(filteredTransactions, range, rollUp)
+        else Reports.spendingWithin(filteredTransactions, range, drill, rollUp)
         val total = spends.sumOf { it.amount }
         val breakdown = spends.map { s ->
             val c = s.categoryId?.let(byId::get)
@@ -137,14 +208,18 @@ class ReportsViewModel @Inject constructor(
             range = range,
             summary = summary,
             savingsRate = Reports.savingsRatePercent(summary.income, summary.netExpense),
-            previousExpense = FinanceRules.summarize(txns, previousRange).netExpense,
+            previousExpense = FinanceRules.summarize(filteredTransactions, previousRange).netExpense,
             averageMonthlyExpense = if (active.isEmpty()) 0 else active.sumOf { it.expense } / active.size,
             trend = trend,
             breakdown = breakdown,
             drillLabel = drill?.let { byId[it]?.name },
             items = filteredItems,
             selectedItem = sel.selectedItemKey?.let { k -> items.firstOrNull { it.key == k } },
-            periodTransactionCount = txns.count { it.occurredAt in range },
+            periodTransactionCount = filteredTransactions.count { it.occurredAt in range },
+            familyPeople = people,
+            familyTags = tags,
+            investedThisPeriodMinor = FinanceRules.investedThisPeriod(txns, investmentAccountIds, range),
+            investmentAccountCount = investmentAccountIds.size,
         )
     }
 
@@ -160,6 +235,8 @@ class ReportsViewModel @Inject constructor(
     fun setItemQuery(q: String) = selection.update { it.copy(itemQuery = q.take(50)) }
     fun selectItem(key: String?) = selection.update { it.copy(selectedItemKey = key, pricePointSelected = null) }
     fun selectPricePoint(i: Int) = selection.update { it.copy(pricePointSelected = i) }
+    fun setFamilyFilter(filter: FamilyReportFilter) =
+        selection.update { it.copy(familyFilter = filter, drillMainGroupId = null, trendSelected = null) }
 
     /** Writes transactions as CSV to [uri]. [allTime] false = only the selected period. */
     fun exportCsv(uri: String, allTime: Boolean) {

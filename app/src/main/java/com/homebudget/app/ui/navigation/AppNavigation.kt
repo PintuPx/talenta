@@ -1,6 +1,9 @@
 package com.homebudget.app.ui.navigation
 
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
@@ -12,17 +15,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -31,8 +38,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import com.homebudget.app.FeatureFlags
 import com.homebudget.app.domain.model.TransactionType
 import com.homebudget.app.ui.accounts.AccountsScreen
+import com.homebudget.app.ui.adminreview.AdminReviewScreen
 import com.homebudget.app.ui.bills.BillReviewScreen
 import com.homebudget.app.ui.bills.BillsScreen
 import com.homebudget.app.ui.budgets.BudgetsScreen
@@ -42,6 +51,15 @@ import com.homebudget.app.ui.categories.CategoriesScreen
 import com.homebudget.app.ui.common.UserMessages
 import com.homebudget.app.ui.dashboard.DashboardScreen
 import com.homebudget.app.ui.edit.EditTransactionScreen
+import com.homebudget.app.ui.family.AppModeScreen
+import com.homebudget.app.ui.familymembers.ExpenseFamilyMembersScreen
+import com.homebudget.app.ui.family.FamilySetupScreen
+import com.homebudget.app.ui.family.FamilyRecoveryScreen
+import com.homebudget.app.ui.family.FamilyHandOverScreen
+import com.homebudget.app.ui.family.FamilyUpdateBanner
+import com.homebudget.app.ui.history.AdminHistoryScreen
+import com.homebudget.app.ui.history.EntryHistoryScreen
+import com.homebudget.app.ui.monthclose.MonthCloseScreen
 import com.homebudget.app.ui.settings.PrivacyScreen
 import com.homebudget.app.ui.settings.SettingsScreen
 import com.homebudget.app.ui.transactions.TransactionListScreen
@@ -59,6 +77,15 @@ import kotlin.reflect.KClass
 @Serializable object ReportsRoute
 @Serializable object BudgetsRoute
 @Serializable object RecurringRoute
+@Serializable object AdminHistoryRoute
+@Serializable object AdminReviewRoute
+@Serializable object MonthCloseRoute
+@Serializable object ModeSettingsRoute
+@Serializable object FamilySetupRoute
+@Serializable object FamilyRecoveryRoute
+@Serializable object FamilyHandOverRoute
+@Serializable object ExpenseFamilyRoute
+@Serializable data class EntryHistoryRoute(val entityType: String, val entityUid: String)
 
 /** Bill list. [startWithAdd] opens the "Add a bill" options immediately (dashboard "Scan bill"). */
 @Serializable data class BillsRoute(val startWithAdd: Boolean = false)
@@ -91,7 +118,12 @@ private val topLevels = listOf(
 )
 
 @Composable
-fun AppRoot(userMessages: UserMessages) {
+fun AppRoot(
+    userMessages: UserMessages,
+    privateMode: Boolean,
+    onTurnOffPrivateMode: () -> Unit,
+    onRequestPrivateMode: () -> Unit,
+) {
     val nav = rememberNavController()
     val snackbar = remember { SnackbarHostState() }
     val backStack by nav.currentBackStackEntryAsState()
@@ -136,11 +168,14 @@ fun AppRoot(userMessages: UserMessages) {
             }
         },
     ) { padding ->
-        NavHost(
-            navController = nav,
-            startDestination = HomeRoute,
-            modifier = Modifier.padding(padding).consumeWindowInsets(padding),
-        ) {
+        Column(Modifier.padding(padding).consumeWindowInsets(padding)) {
+            if (privateMode) PrivateModeBanner(onTurnOffPrivateMode)
+            if (FeatureFlags.FAMILY_SHARING) FamilyUpdateBanner()
+            NavHost(
+                navController = nav,
+                startDestination = HomeRoute,
+                modifier = Modifier.weight(1f),
+            ) {
             composable<HomeRoute> {
                 DashboardScreen(
                     onAddTransaction = { type -> nav.navigate(EditTransactionRoute(type = type.name)) },
@@ -162,6 +197,7 @@ fun AppRoot(userMessages: UserMessages) {
                     onScanBill = { nav.navigate(BillsRoute(startWithAdd = true)) },
                     onOpenBills = { nav.navigate(BillsRoute()) },
                     onOpenBudgets = { nav.navigate(BudgetsRoute) },
+                    onOpenMonthClose = { nav.navigate(MonthCloseRoute) },
                 )
             }
             composable<TransactionsRoute> {
@@ -182,6 +218,45 @@ fun AppRoot(userMessages: UserMessages) {
                     onOpenPrivacy = { nav.navigate(PrivacyRoute) },
                     onOpenBudgets = { nav.navigate(BudgetsRoute) },
                     onOpenRecurring = { nav.navigate(RecurringRoute) },
+                    onOpenHistory = { nav.navigate(AdminHistoryRoute) },
+                    onOpenAdminReview = { if (FeatureFlags.FAMILY_SHARING) nav.navigate(AdminReviewRoute) },
+                    onManageFamily = { if (FeatureFlags.FAMILY_SHARING) nav.navigate(FamilySetupRoute) },
+                    onManageExpenseMembers = { if (FeatureFlags.FAMILY_EXPENSES) nav.navigate(ExpenseFamilyRoute) },
+                    onOpenMonthClose = { nav.navigate(MonthCloseRoute) },
+                    onOpenMode = { if (FeatureFlags.FAMILY_SHARING) nav.navigate(ModeSettingsRoute) },
+                    onRequestPrivateMode = onRequestPrivateMode,
+                )
+            }
+            composable<AdminHistoryRoute> { AdminHistoryScreen(onBack = { nav.popBackStack() }) }
+            if (FeatureFlags.FAMILY_SHARING) {
+                composable<AdminReviewRoute> { AdminReviewScreen() }
+                composable<ModeSettingsRoute> {
+                    AppModeScreen(
+                        firstLaunch = false,
+                        onBack = { nav.popBackStack() },
+                        onOpenFamilySetup = { nav.navigate(FamilySetupRoute) },
+                    )
+                }
+                composable<FamilySetupRoute> {
+                    FamilySetupScreen(
+                        onBack = { nav.popBackStack() },
+                        onOpenRecovery = { nav.navigate(FamilyRecoveryRoute) },
+                        onOpenHandOver = { nav.navigate(FamilyHandOverRoute) },
+                    )
+                }
+                composable<FamilyRecoveryRoute> { FamilyRecoveryScreen(onBack = { nav.popBackStack() }) }
+                composable<FamilyHandOverRoute> { FamilyHandOverScreen(onBack = { nav.popBackStack() }) }
+            }
+            composable<MonthCloseRoute> { MonthCloseScreen() }
+            if (FeatureFlags.FAMILY_EXPENSES) {
+                composable<ExpenseFamilyRoute> { ExpenseFamilyMembersScreen(onBack = { nav.popBackStack() }) }
+            }
+            composable<EntryHistoryRoute> {
+                val route = it.toRoute<EntryHistoryRoute>()
+                EntryHistoryScreen(
+                    entityType = route.entityType,
+                    entityUid = route.entityUid,
+                    onBack = { nav.popBackStack() },
                 )
             }
             composable<ReportsRoute> { ReportsScreen(onOpenBudgets = { nav.navigate(BudgetsRoute) }) }
@@ -191,6 +266,7 @@ fun AppRoot(userMessages: UserMessages) {
                     onBack = { nav.popBackStack() },
                     onAdd = { nav.navigate(EditTransactionRoute(repeat = true)) },
                     onOpen = { id -> nav.navigate(EditTransactionRoute(recurringId = id)) },
+                    onScanBill = { nav.navigate(BillsRoute(startWithAdd = true)) },
                 )
             }
             composable<CategoriesRoute> { CategoriesScreen(onBack = { nav.popBackStack() }) }
@@ -206,6 +282,7 @@ fun AppRoot(userMessages: UserMessages) {
                     onManageCategories = { nav.navigate(CategoriesRoute) },
                     onOpenBill = { id -> nav.navigate(BillRoute(id)) },
                     onOpenRecurring = { id -> nav.navigate(EditTransactionRoute(recurringId = id)) },
+                    onOpenHistory = { uid -> nav.navigate(EntryHistoryRoute("transaction", uid)) },
                 )
             }
             composable<BillsRoute> {
@@ -221,6 +298,20 @@ fun AppRoot(userMessages: UserMessages) {
                     onManageCategories = { nav.navigate(CategoriesRoute) },
                 )
             }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrivateModeBanner(onTurnOff: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.primaryContainer) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Text("Private mode is on. Only private-space data is shown.", Modifier.weight(1f))
+            TextButton(onClick = onTurnOff) { Text("Turn off") }
         }
     }
 }

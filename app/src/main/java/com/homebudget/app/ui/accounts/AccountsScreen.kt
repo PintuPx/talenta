@@ -47,6 +47,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.homebudget.app.FeatureFlags
 import com.homebudget.app.domain.model.AccountType
 import com.homebudget.app.ui.common.ChoiceDialog
 import com.homebudget.app.ui.common.ConfirmDialog
@@ -64,6 +65,7 @@ fun AccountsScreen(onOpenAccount: (Long) -> Unit, vm: AccountsViewModel = hiltVi
     val state by vm.state.collectAsStateWithLifecycle()
     val editor by vm.editor.collectAsStateWithLifecycle()
     val fmt = LocalMoneyFormatter.current
+    var valueTarget by remember { mutableStateOf<AccountWithBalance?>(null) }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Accounts") }) },
@@ -104,7 +106,12 @@ fun AccountsScreen(onOpenAccount: (Long) -> Unit, vm: AccountsViewModel = hiltVi
                     }
                 }
                 items(state.active, key = { it.account.id }) { row ->
-                    AccountRow(row, onOpen = { onOpenAccount(row.account.id) }, onEdit = { vm.startEdit(row.account) })
+                    AccountRow(
+                        row,
+                        onOpen = { onOpenAccount(row.account.id) },
+                        onEdit = { vm.startEdit(row.account) },
+                        onUpdateValue = { valueTarget = row },
+                    )
                 }
                 if (state.archived.isNotEmpty()) {
                     item {
@@ -115,7 +122,12 @@ fun AccountsScreen(onOpenAccount: (Long) -> Unit, vm: AccountsViewModel = hiltVi
                         )
                     }
                     items(state.archived, key = { it.account.id }) { row ->
-                        AccountRow(row, onOpen = { onOpenAccount(row.account.id) }, onEdit = { vm.startEdit(row.account) })
+                        AccountRow(
+                            row,
+                            onOpen = { onOpenAccount(row.account.id) },
+                            onEdit = { vm.startEdit(row.account) },
+                            onUpdateValue = { valueTarget = row },
+                        )
                     }
                 }
                 item { Spacer(Modifier.height(96.dp)) }
@@ -124,35 +136,85 @@ fun AccountsScreen(onOpenAccount: (Long) -> Unit, vm: AccountsViewModel = hiltVi
     }
 
     editor?.let { e -> AccountEditorDialog(e, vm) }
+    valueTarget?.let { target ->
+        if (FeatureFlags.INVESTMENTS) {
+            InvestmentValueDialog(
+                accountId = target.account.id,
+                accountName = target.account.name,
+                onDismiss = { valueTarget = null },
+                onSave = { text ->
+                    if (vm.saveInvestmentValue(target.account.id, text, fmt.fractionDigits)) valueTarget = null
+                },
+            )
+        }
+    }
 }
 
 @Composable
-private fun AccountRow(row: AccountWithBalance, onOpen: () -> Unit, onEdit: () -> Unit) {
+private fun AccountRow(row: AccountWithBalance, onOpen: () -> Unit, onEdit: () -> Unit, onUpdateValue: () -> Unit) {
     val fmt = LocalMoneyFormatter.current
     val fc = LocalFinanceColors.current
     val a = row.account
     val owed = a.type == AccountType.CREDIT_CARD && row.balance < 0
+    val investment = a.type == AccountType.INVESTMENT
+    val displayedBalance = row.balance
     ListItem(
         modifier = Modifier.clickable(onClickLabel = "View ${a.name} transactions", onClick = onOpen),
         leadingContent = { Icon(a.type.icon(), contentDescription = null) },
         supportingContent = {
-            Text(
-                buildString {
-                    append(a.type.label())
-                    if (!a.includeInTotal) append(" · not in total")
-                },
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    buildString {
+                        append(a.type.label())
+                        if (!a.includeInTotal) append(" · not in total")
+                    },
+                )
+                if (FeatureFlags.INVESTMENTS && investment) {
+                    Text("Contributions: ${fmt.format(row.contributionsBalance)}")
+                    row.currentValueMinor?.let { value ->
+                        val gainLoss = com.homebudget.app.domain.finance.FinanceRules.investmentGain(value, row.contributionsBalance)
+                        Text("${if (gainLoss >= 0) "Gain" else "Loss"}: ${fmt.format(kotlin.math.abs(gainLoss))}")
+                    } ?: Text("Current value not set")
+                    TextButton(onClick = onUpdateValue) { Text("Update current value") }
+                }
+            }
         },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(fmt.format(row.balance), color = if (row.balance < 0) fc.expense else MaterialTheme.colorScheme.onSurface)
+                    Text(fmt.format(displayedBalance), color = if (displayedBalance < 0) fc.expense else MaterialTheme.colorScheme.onSurface)
+                    if (FeatureFlags.INVESTMENTS && investment && row.currentValueMinor != null) {
+                        Text("current value", style = MaterialTheme.typography.labelSmall)
+                    }
                     if (owed) Text("owed", style = MaterialTheme.typography.labelSmall, color = fc.expense)
                 }
                 IconButton(onClick = onEdit) { Icon(Icons.Filled.Edit, contentDescription = "Edit ${a.name}") }
             }
         },
     ) { Text(a.name) }
+}
+
+@Composable
+private fun InvestmentValueDialog(accountId: Long, accountName: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var valueText by remember(accountId) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Update current value") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Enter the current value for $accountName. Gain or loss is compared with contributions.")
+                OutlinedTextField(
+                    value = valueText,
+                    onValueChange = { valueText = it.take(20) },
+                    label = { Text("Current value") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(valueText) }) { Text("Save value") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -175,6 +237,12 @@ private fun AccountEditorDialog(e: AccountEditorState, vm: AccountsViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 SelectField(label = "Type", value = e.type.label(), onClick = { pickType = true })
+                if (FeatureFlags.INVESTMENTS && e.type == AccountType.INVESTMENT) {
+                    Text(
+                        "Add or withdraw money with a transfer. Transfers are not income or expenses.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 OutlinedTextField(
                     value = e.openingText,
                     onValueChange = { v -> vm.updateEditor { it.copy(openingText = v.take(20), openingError = null) } },
@@ -206,7 +274,7 @@ private fun AccountEditorDialog(e: AccountEditorState, vm: AccountsViewModel) {
     if (pickType) {
         ChoiceDialog(
             title = "Account type",
-            options = AccountType.entries,
+            options = AccountType.entries.filter { FeatureFlags.INVESTMENTS || it != AccountType.INVESTMENT || it == e.type },
             selected = e.type,
             label = { it.label() },
             onSelect = { t -> vm.updateEditor { it.copy(type = t) }; pickType = false },
@@ -216,7 +284,7 @@ private fun AccountEditorDialog(e: AccountEditorState, vm: AccountsViewModel) {
     if (confirmDelete) {
         ConfirmDialog(
             title = "Delete account?",
-            message = "Only accounts without transactions can be deleted. Accounts with history can be archived instead.",
+            message = "Only accounts without saved records can be deleted. Accounts with history can be archived instead.",
             confirmLabel = "Delete",
             onConfirm = { confirmDelete = false; vm.deleteEditing() },
             onDismiss = { confirmDelete = false },

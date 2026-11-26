@@ -1,115 +1,92 @@
-# Project status (2026-11-24)
+# Project status (2026-11-25)
 
-## Version 0.1.2: verified on the emulator and tested on a real phone
-- **Unit tests:** 238 pass, 0 fail. **Lint:** 0 errors (2 old warnings). **Release APK** builds and is signed.
-- **Emulator (release build, API 36):**
-  - The app opens from the launcher (wallet icon alias).
-  - Scan bill → Choose a photo → review screen: 9 lines, merchant and total read. No crash.
-  - Home shows "Set this month's budget".
-- **Fixed in 0.1.1:** Scan bill crashed in release builds only (code shrinking removed ML Kit parts). See [CHANGELOG](../CHANGELOG.md).
-- **Real phone:** the owner tested 0.1.2 and reported it works, including the Scan bill fix.
-- **Not verified yet:** the CI workflow on GitHub; the wallet widget and icon switching on more phones and launchers.
-- **In the code but not used by the app yet:** roles and permissions, inventory and proposal models, sync encryption and file format (`domain/household`, `domain/inventory`, `domain/proposal`, `domain/sync`). Backup format v4 already reserves fields for inventory and requests.
-- **Everything else planned:** see the To-do list in [FEATURES.md](FEATURES.md).
+Current: **0.2.0 release candidate**. Not published anywhere.
 
-## Phase 3 (planning and insights): implemented and verified
+## 0.2.0 release candidate
 
-### Built
-- **Budgets:** monthly overall and category/group limits; warning at 80%, over at 100% (shown with an icon and text, not only color); amount per day left; copy from an earlier month; "spending without a budget"; Home budget card.
-- **Reports:** month or year; income, expenses, savings, savings rate, change from the previous period, average monthly spend; income-vs-expense bar chart (tap a month); category breakdown with drill-down into groups.
-- **Item price history:** line chart per item from approved bill lines (e.g. Sugar over purchase dates), with latest, lowest, highest, average and % change.
-- **CSV export:** this period or all transactions; formula injection guarded; UTF-8 BOM so ₹ shows in Excel.
-- **Repeating transactions:** Repeat option on a new transaction (daily to yearly); added automatically when the app opens; list with pause/resume; edit or delete a rule.
-- Room schema **v3** (`recurring_rules`, `transactions.recurring_id`) with `MIGRATION_2_3`; backup format **v3** (older files still restore).
-- Charts are drawn with Compose Canvas (no chart library). Every chart has a TalkBack description, and its numbers are also shown as text.
+### Verified today (2026-11-25, working tree)
+| Check | Result |
+|---|---|
+| Unit tests (`gradlew testDebugUnitTest`) | 369 run, 0 failed, 0 skipped |
+| Lint (`lintDebug`) | 0 issues |
+| Builds | debug APK and androidTest APK build |
 
-### Guardrails and project hygiene
-- `GuardrailTest` fails the build if: a network or dangerous permission is added; a tracking/ads SDK appears; code logs to Logcat; `domain/` imports Android; money code uses floating point; a schema version lacks an exported file, a migration or a migration test; a new table isn't added to backup or clear-all; secrets or AI prompt files aren't git-ignored; a dependency has no license entry.
-- Added `THIRD_PARTY_NOTICES.md` (licenses checked; ML Kit is proprietary), `CONTRIBUTING.md`, `SECURITY.md`, a CI workflow (`.github/workflows/ci.yml`, not yet run on GitHub), `docs/RELEASE.md` (Play checklist, listing draft, Data safety answers), `docs/privacy-policy.md`, `docs/FEATURES.md`.
-- AI-assistant files (`CLAUDE.md`, `.claude/`) are git-ignored, as requested.
+Device tests (API 36 emulator): 9 run, 0 failed, 0 skipped (AppSmokeTest, 7 MigrationTest incl. v3→v4 and v3→v5 with a repeating rule, OnDeviceOcrTest)
 
-### Verification
-- **JVM tests:** 207 pass, 0 fail (up from 94). New: recurrence, budget rules, reports, price history, CSV, budget and repeating repositories, backup v3, repeat-field UI, share labels, guardrails.
-- **Instrumented (API 36 emulator):** 5 pass: migrations 1→2→3 (incl. new 2→3 with data), real ML Kit OCR, app smoke test.
-- **Lint:** no errors. **Builds:** debug APK and minified release AAB (25.0 MB, unsigned). The merged release manifest still has no network permission and no telemetry service.
-- **Manual emulator run:** monthly ₹15,000 rent posted immediately, next date Dec 23 shown; overall budget ₹20,000 → ₹5,000 left, ₹714.28/day (7 days left, correct); rent budget ₹14,000 → "Over by ₹1,000.00"; reports bar chart and drill-down; two manual bills "Sugar 1kg" ₹48 (24 Nov) and "SUGAR" ₹44 (15 Nov) grouped as one item with a line chart and +9%. No crashes; no app telemetry in logcat.
-- **Fixed during this phase:** a tiny category share showed "0%" (now "<1%"); an invisible byte-order-mark character in source flagged by lint.
+First run on the API 36 emulator (budget36): 9 tests, 7 passed, 2 failed.
+- Passed: all 7 `MigrationTest` migrations, including v3→v4, v4→v5, the new v3→v4 and v3→v5 tests with a repeating rule, and `allMigrationsReachCurrentSchema`. `OnDeviceOcrTest` also passed.
+- The 2 failures were test-side and are being fixed. No final number is reported yet.
 
-### Phase 3 limitations
-- Repeating transactions are added when the app is opened (no background job or notifications, which would need extra permissions).
-- Paused rules skip missed dates on resume; there's no end date for a rule yet.
-- Item prices are line totals, not unit prices (quantity isn't read from bills).
+### Data formats
+- Database schema **v5**: migrations 1→2→3→4→5, schema JSON 1–5 exported.
+- Backup format **v8**. Older formats restore (`BackupFormatRestoreTest` covers v3–v8).
 
-## Phase 2 (bills): implemented and verified earlier
+### Fixed today
+- Code did not compile (151 errors).
+- Schema 4 JSON was missing.
+- v3→v4 migration crashed for users with repeating transactions.
+- Private bill lines leaked into shared history.
+- Per-entry history ignored private space.
+- Family shares were not updated after changing past bill groups (backup then failed restore).
+- History snapshot crashed when a share's transaction row was missing.
+- Repeating transactions stuck after a month close.
+- `restore()` did not check the backup format version.
+- Investment gain/loss moved into `FinanceRules`.
+- History field labels are now sentence case.
 
-### Requested changes
-- [x] **Save button colors.** Income Save is green and expense Save is red (finance colors, contrast checked: light 6.3:1 / 6.5:1, dark 7.7:1). The label also says "Save income" / "Save expense", so color isn't the only cue. Transfers keep the neutral color. Verified on the emulator.
-- [x] **Store bills.** Take a photo (your camera app) or choose one (system photo picker). The app needs no camera or storage permission. Photos are re-saved upright, at most 2400 px, as JPEG without metadata, in the app's private storage.
-- [x] **Read the bill text** on the device with ML Kit's bundled Latin-script model. Nothing is downloaded or uploaded.
-- [x] **Bulk import page ("Review bill").** One card per line: **Item · Amount · Group · Main group**, for example *Veggie · ₹40 · Vegetables · Groceries*. Lines can be edited, excluded, removed or added. "Fill blanks" assigns one group to every unassigned line. Merchant, date, time and bill total are pre-filled.
-- [x] **Automatic sections, approved by you.** Each line gets a suggested group, from:
-  1. what you approved before for the same item (learned rules), then
-  2. a built-in keyword list (veggie, tomato, milk, dal, bread, detergent…).
+### Not verified yet (pending)
+- Release build signature: pending.
+- Merged release manifest check: pending.
+- Release APK smoke test: pending.
+- Upgrade test from 0.1.2: pending.
+- Physical device: camera capture, airplane mode, dark mode, large font, TalkBack, real SAF picker for backup (no runtime check of these yet).
+- CI workflow on GitHub (not yet run).
 
-  Nothing is saved as an expense until you tap **Approve**, and every approval teaches the app.
-- [x] **Split a bill.** The Split card shows each main group with its groups (Groceries → Vegetables, Dairy & Eggs…). Approving adds one expense per group. Approving again replaces those expenses (no duplicates). Deleting a bill deletes them too.
-- [x] **Groups inside categories** (two levels). There are 10 default groups under Groceries. You can add groups and move categories in Settings → Categories. The dashboard rolls groups up into their main group, and filtering by a main group includes its groups.
+### Known limitations
+- Private mode with "Ask for device lock" cannot be turned on on Android 9–10.
+- Hidden behind `FeatureFlags`: family sharing, sync, archive, buying list, price checks, changing-amount bills, place, update check, encrypted backup, connections. The sync code is present but switched off.
+- Backups and CSV files are not encrypted. The database is not encrypted by the app.
+- Single currency for the whole app; three-decimal currencies are not supported.
+- Restore replaces all data. Bill photos are not in backups.
 
-### Supporting work
-- [x] Room schema **v2** with `MIGRATION_1_2`. Existing data is kept, and grocery groups are added for existing users.
-- [x] Backup format **v2** (groups, bills, bill lines, learned rules). Version 1 files still restore. **Bill photos are not included in backups**, and the export warning and Privacy page say so.
-- [x] "Clear all data" also deletes bills and photos.
-- [x] Privacy: ML Kit's `INTERNET`, `ACCESS_NETWORK_STATE` and usage-statistics uploader are removed from the manifest. The merged **release** manifest has no network permission.
+Feature list: [FEATURES.md](FEATURES.md). Release notes: [CHANGELOG](../CHANGELOG.md).
 
-### Verification
-- **JVM tests:** 94 pass, 0 fail. New tests:
-  - `ReceiptParserTest`: column layouts, tilted photos, ₹ and Indian grouping, dates and times, tax and payment rows.
-  - `CategorySuggesterTest`.
-  - `BillSplitTest`, including roll-up in reports and budgets.
-  - `BillRepositoryTest`: approve, re-approve, validation, OCR with a fake recognizer, delete, backup round trip, v1 restore. Runs in Robolectric native-graphics mode.
-  - A group-picker UI test.
-- **Instrumented tests (API 36 emulator):** 4 pass.
-  - `MigrationTest`: both tests, including 1→2 with data.
-  - `OnDeviceOcrTest`: real ML Kit on a rendered receipt, with the app's no-internet manifest.
-  - `AppSmokeTest`.
-- **Lint:** no issues.
-- **Manual run on the emulator:** scanned a receipt photo through the photo picker.
-  - Read: 9 items, merchant, date, time and the ₹649 total. 8 items were suggested; "Widget clip" was unknown.
-  - Approval was blocked until Widget clip had a group.
-  - After approval: 6 expenses. Dashboard Groceries ₹618 + Shopping ₹25.
-  - A second scan suggested all 9 items (learned rule).
-  - Delete removed the bill's photo. No crashes and no telemetry activity in logcat.
-- **Bugs found and fixed during this phase:**
-  - Photo import always failed on a real device. The bounds-only decode returns null by design and was treated as an error. Robolectric's default graphics hid it; the tests now use native graphics and fail on the old code.
-  - On tilted photos, prices didn't join their item names. Rows are now de-skewed using the OCR text angle.
-  - Discounted items were dropped when an item cost more than the net total.
-  - A misread quantity ("N") was kept in the item name.
+## Version 0.1.2: verified on the emulator and a real phone
+- Unit tests 238 pass (at that release). Lint 0 errors. Release APK built and signed.
+- Emulator (release build, API 36): app opens from the launcher; Scan bill → Choose a photo → review (9 lines, merchant and total read); Home shows "Set this month's budget".
+- Fixed in 0.1.1: Scan bill crashed in release builds only (code shrinking removed ML Kit parts).
+- Real phone: the owner tested 0.1.2 and reported it works, including the Scan bill fix.
+- In the code but not used by the app then: roles, inventory, proposals, sync format (`domain/household`, `domain/inventory`, `domain/proposal`, `domain/sync`). Backup format v8 retains reserved fields for inventory and requests.
 
-### Bill reading: known limitations
-- Latin-script text only (English and numbers). Devanagari or other scripts aren't recognised; type those items instead.
-- Parsing is heuristic. Handwritten bills, very faded thermal paper, multi-column items or items split over two lines may need manual fixes, which is why every line is reviewed before approval.
-- Discount and tax rows aren't turned into lines automatically. The page shows the difference from the bill total and offers "Add as a line" for positive differences.
-- The APK grows by about 4 MB per CPU architecture for the bundled OCR model. A Play AAB delivers only the device's architecture.
-- Bill photos aren't in backups; restoring on a new phone keeps the bills and their lines, without photos.
+## Phase 3 (planning and insights)
+- **Budgets:** monthly overall and category/group limits; warning at 80%, over at 100% (icon and text); amount per day left; copy from an earlier month; spending without a budget.
+- **Reports:** month or year; income, expenses, savings, savings rate, change from previous period; income-vs-expense chart; category drill-down.
+- **Item price history:** line chart per item from approved bill lines.
+- **CSV export:** formula injection guarded; UTF-8 BOM.
+- **Repeating transactions:** daily to yearly; added when the app opens; pause/resume; edit or delete.
+- Charts use Compose Canvas (no chart library), with TalkBack descriptions and numbers as text.
+- `GuardrailTest` fails the build on: network or dangerous permissions, tracking/ads SDKs, Logcat logging, Android imports in `domain/`, floating point in money code, a schema version without exported file/migration/migration test, a new table missing from backup or clear-all, secrets files not git-ignored, a dependency without a license entry.
+- Limitations: repeating transactions run only when the app opens; paused rules skip missed dates on resume; no end date for a rule; item prices are line totals, not unit prices.
+- Results at that phase: 207 JVM tests passed; 5 emulator tests passed; lint no errors; manual emulator run without crashes.
 
-## Phase 1: implemented and verified earlier
-Room schema; money as `Long` minor units with INR grouping; `FinanceRules`; transactions (add, edit, delete with Undo, duplicate); search, filters and sorting; accounts; categories; dashboard; settings; SAF backup and restore; privacy page. Details are in the git history and in [ARCHITECTURE.md](ARCHITECTURE.md).
+## Phase 2 (bills)
+- Bills: photo from camera app or photo picker (no camera or storage permission); re-saved upright, max 2400 px, JPEG without metadata, in private storage.
+- On-device text reading with ML Kit's bundled Latin-script model; nothing is downloaded or uploaded.
+- Review page: one card per line (Item, Amount, Group, Main group); edit, exclude, remove, add; "Fill blanks".
+- Suggested groups come from learned rules, then a built-in keyword list. Nothing is saved until Approve.
+- Split a bill: one expense per group; re-approve replaces them; deleting the bill deletes them.
+- Two-level categories (10 default groups under Groceries).
+- Bill photos are not in backups. "Clear all data" deletes bills and photos.
+- ML Kit's `INTERNET`, `ACCESS_NETWORK_STATE` and usage-statistics uploader are removed from the manifest.
+- Limitations: Latin script only; heuristic parsing (handwriting, faded paper, multi-line items need manual fixes); discount/tax rows are not turned into lines automatically; APK grows about 4 MB per CPU architecture for the OCR model.
 
-## Not yet verified
-- [ ] Physical device: real camera capture with your camera app, real receipts in different lighting, airplane mode, dark mode, large font, TalkBack.
-- [ ] Release build at runtime. The minified AAB builds, but an unsigned bundle can't be installed for a runtime check.
-- [ ] Backup export and import through the real SAF picker (logic is covered by tests).
+## Phase 1
+Room schema; money as `Long` minor units with INR grouping; `FinanceRules`; transactions (add, edit, delete with Undo, duplicate); search, filters, sorting; accounts; categories; dashboard; settings; SAF backup and restore; privacy page. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Pending: next phases
-- [ ] Optional users and roles: first-launch mode choice (personal / shared), optional Google sign-in (identity only, data stays on the phone), one Admin, Reviewer, Read-only, Admin review of shared users' changes.
-- [ ] Inventory and purchase requests, with an item price trend when adding an item.
-- [ ] Google Play beta (after all features).
-- [ ] Bill reading for Indian scripts (ML Kit Devanagari model), item quantity and unit price columns, multi-page bills.
-- [ ] App lock, localization (strings are still inline English).
-- [ ] Final branding (colors, font, icon: waiting on owner input; see `BRANDING.md`).
-- [ ] Release signing, store listing, privacy policy URL, Play Console forms. The Data safety form must mention that photos are processed on the device only.
-
-## Known limitations (unchanged from Phase 1)
-- Single currency for the whole app; three-decimal currencies aren't supported.
-- The database isn't encrypted by the app (Android sandbox plus device encryption).
-- Backups are plain JSON; restore replaces all data.
+## Planned
+- Family sharing between phones and sync (code present, switched off).
+- Buying list and price checks.
+- Bill reading for Indian scripts, quantity and unit price, multi-page bills.
+- Localization (strings are inline English).
+- Final branding (see `BRANDING.md`).
+- Release signing, store listing, privacy policy URL, Play Console forms. Google Play beta only after all planned features.

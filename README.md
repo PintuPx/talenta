@@ -4,6 +4,15 @@ A free, offline-first Android app for tracking household income, expenses, trans
 balances, with budgets, reports, repeating transactions and shop-bill scanning into grouped expenses. It has no ads, no account and no
 internet access. Bill text is read on the device.
 
+<p>
+<img src="docs/images/home.png" alt="Home screen" width="200">
+<img src="docs/images/bill-review.png" alt="Bill review" width="200">
+<img src="docs/images/budgets.png" alt="Budgets" width="200">
+<img src="docs/images/reports.png" alt="Reports" width="200">
+</p>
+
+- **User guide with screenshots (install and how to use the app):** [docs/USER_GUIDE.md](docs/USER_GUIDE.md)
+- **Download the app:** [latest release](https://github.com/PintuPx/talenta/releases/latest)
 - **Feature reference (what the app does, where to find it):** [docs/FEATURES.md](docs/FEATURES.md)
 - **Status, pending work and limitations:** [docs/STATUS.md](docs/STATUS.md) · **Changes:** [CHANGELOG.md](CHANGELOG.md)
 - **License:** [Apache-2.0](LICENSE)

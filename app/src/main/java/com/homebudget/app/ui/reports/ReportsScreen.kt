@@ -3,6 +3,8 @@ package com.homebudget.app.ui.reports
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -53,7 +56,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.homebudget.app.FeatureFlags
 import com.homebudget.app.domain.report.ItemPriceHistory
+import com.homebudget.app.domain.family.FamilyReportFilter
 import com.homebudget.app.ui.common.CategoryBadge
 import com.homebudget.app.ui.common.CategoryIcons
 import com.homebudget.app.ui.common.ChartLegend
@@ -100,6 +105,9 @@ fun ReportsScreen(
             state.error != null -> EmptyState(Icons.Filled.ErrorOutline, "Something went wrong", state.error!!, Modifier.padding(padding))
             else -> LazyColumn(Modifier.padding(padding), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item { PeriodBar(state, vm) }
+                if (state.familyPeople.isNotEmpty() || state.familyTags.isNotEmpty()) {
+                    item { FamilyFilterCard(state, vm::setFamilyFilter) }
+                }
                 item { SummaryCard(state) }
                 item { TrendCard(state, vm::selectTrend) }
                 item { BreakdownCard(state, vm::drillInto) }
@@ -129,6 +137,43 @@ fun ReportsScreen(
                 }) { Text("All transactions") }
             },
         )
+    }
+}
+
+@Composable
+private fun FamilyFilterCard(state: ReportsUiState, onSelect: (FamilyReportFilter) -> Unit) {
+    ReportCard("Family shares") {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(
+                selected = state.selection.familyFilter == FamilyReportFilter.None,
+                onClick = { onSelect(FamilyReportFilter.None) },
+                label = { Text("All transactions") },
+            )
+            FilterChip(
+                selected = state.selection.familyFilter == FamilyReportFilter.Unassigned,
+                onClick = { onSelect(FamilyReportFilter.Unassigned) },
+                label = { Text("Not assigned") },
+            )
+            state.familyPeople.forEach { person ->
+                val filter = FamilyReportFilter.Person(person.uid)
+                FilterChip(
+                    selected = state.selection.familyFilter == filter,
+                    onClick = { onSelect(filter) },
+                    label = { Text(if (person.active) person.name else "${person.name} (removed)") },
+                )
+            }
+            state.familyTags.forEach { tag ->
+                val filter = FamilyReportFilter.Tag(tag.uid)
+                FilterChip(
+                    selected = state.selection.familyFilter == filter,
+                    onClick = { onSelect(filter) },
+                    label = { Text(tag.name) },
+                )
+            }
+        }
     }
 }
 
@@ -188,6 +233,10 @@ private fun SummaryCard(state: ReportsUiState) {
                 Spacer(Modifier.size(6.dp))
                 Text("Savings rate: $rate% of income", style = MaterialTheme.typography.bodyMedium)
             }
+        }
+        if (FeatureFlags.INVESTMENTS && state.investmentAccountCount > 0) {
+            val label = if (state.selection.period == ReportPeriod.MONTH) "Invested this month" else "Invested this year"
+            Text("$label: ${fmt.format(state.investedThisPeriodMinor)}", style = MaterialTheme.typography.bodyMedium)
         }
         val prev = state.previousExpense
         val periodWord = if (state.selection.period == ReportPeriod.MONTH) "last month" else "last year"

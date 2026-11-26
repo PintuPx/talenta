@@ -72,6 +72,7 @@ class PlanningRepositoryTest {
     private lateinit var budgets: BudgetRepository
     private lateinit var recurring: RecurringRepository
     private lateinit var bills: BillRepository
+    private lateinit var repos: TestRepositories
     private val clock = Clock.fixed(Instant.parse("2026-11-20T10:00:00Z"), ZoneOffset.UTC)
     private val dsScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -93,12 +94,13 @@ class PlanningRepositoryTest {
             .allowMainThreadQueries()
             .build()
         images = BillImageStore(context)
-        transactions = TransactionRepository(db, clock)
-        categories = CategoryRepository(db, clock)
-        accounts = AccountRepository(db, clock)
-        budgets = BudgetRepository(db)
-        recurring = RecurringRepository(db, transactions, clock)
-        bills = BillRepository(db, clock, images, noOcr)
+        repos = TestRepositories(db, clock)
+        transactions = repos.transactions()
+        categories = repos.categories()
+        accounts = repos.accounts()
+        budgets = BudgetRepository(db, repos.writer)
+        recurring = RecurringRepository(db, transactions, clock, repos.writer, monthLocks = repos.monthLocks)
+        bills = BillRepository(db, clock, images, noOcr, repos.writer, repos.expenseFamily)
     }
 
     @After
@@ -112,7 +114,10 @@ class PlanningRepositoryTest {
     private suspend fun bankId() = accounts.save(Account(name = "Bank", type = AccountType.SAVINGS))
     private fun at(s: String) = LocalDateTime.parse(s)
     private fun later(iso: String) = Clock.fixed(Instant.parse(iso), ZoneOffset.UTC)
-    private fun repoAt(c: Clock) = RecurringRepository(db, TransactionRepository(db, c), c)
+    private fun repoAt(c: Clock): RecurringRepository {
+        val r = TestRepositories(db, c)
+        return RecurringRepository(db, r.transactions(), c, r.writer, monthLocks = r.monthLocks)
+    }
 
     private suspend fun rentRule(start: String = "2026-09-20T09:00", amount: Long = 50_000) = RecurringRule(
         type = TransactionType.EXPENSE, amount = amount, accountId = cashId(), categoryId = cat("Groceries"),
@@ -291,6 +296,22 @@ class PlanningRepositoryTest {
     }
 
     @Test
+    fun changingBillWaitsForConfirmedAmountAndAdvancesWithTheExpense() = runTest {
+        val id = recurring.save(rentRule(start = "2026-09-20T09:00").copy(amountChanges = true))
+        assertEquals(0, recurring.postDue())
+        assertTrue(transactions.observeAll().first().isEmpty())
+        expectIntegrity { recurring.postDueOccurrence(id) }
+        assertTrue(transactions.observeAll().first().isEmpty())
+
+        recurring.postDueOccurrence(id, amountMinor = 64_500)
+
+        val transaction = transactions.observeAll().first().single()
+        assertEquals(64_500L, transaction.amount)
+        assertEquals(id, transaction.recurringId)
+        assertEquals(1, recurring.get(id)?.postedCount)
+    }
+
+    @Test
     fun editingAmountKeepsPostedCountButChangingStartRestartsCounting() = runTest {
         val id = recurring.save(rentRule())
         recurring.save(recurring.get(id)!!.copy(amount = 60_000))
@@ -397,7 +418,7 @@ class PlanningRepositoryTest {
     fun clearAllDataDeletesRulesAndTheirTransactions() = runTest {
         recurring.save(rentRule())
         budgets.save(BudgetLimit(month = nov, categoryId = null, limit = 1_000))
-        DataMaintenanceRepository(db, clock, images).clearAllData()
+        repos.maintenance(images).clearAllData()
         assertTrue(recurring.observeRules().first().isEmpty())
         assertTrue(transactions.observeAll().first().isEmpty())
         assertTrue(budgets.observeForMonth(nov).first().isEmpty())
@@ -439,14 +460,14 @@ class PlanningRepositoryTest {
 
     private fun backupRepo(storage: BackupStorage = MemoryStorage(), name: String = "s.preferences_pb"): BackupRepository {
         val settings = SettingsRepository(PreferenceDataStoreFactory.create(scope = dsScope) { File(tmp.root, name) })
-        return BackupRepository(db, storage, settings, clock, images)
+        return repos.backup(storage, settings, images)
     }
 
     @Test
     fun snapshotIncludesRulesAndTransactionLinks() = runTest {
         val id = recurring.save(rentRule())
         val snapshot = backupRepo().createSnapshot()
-        assertEquals(4, snapshot.formatVersion)
+        assertEquals(8, snapshot.formatVersion)
         assertEquals(1, snapshot.recurringRules.size)
         val r = snapshot.recurringRules.single()
         assertEquals(id, r.id)
@@ -480,6 +501,23 @@ class PlanningRepositoryTest {
         assertTrue(transactions.observeAll().first().all { it.recurringId == id })
         assertFalse(recurring.get(id)!!.active)
         assertEquals(0, recurring.postDue()) // paused rule stays paused after restore
+    }
+
+    @Test
+    fun backupRoundTripKeepsChangingAmountRuleFlag() = runTest {
+        val storage = MemoryStorage()
+        val backup = backupRepo(storage)
+        val id = recurring.save(rentRule(start = "2027-01-20T09:00").copy(amountChanges = true))
+
+        backup.exportTo("variable-bill")
+        val file = (backup.inspect("variable-bill") as BackupDecodeResult.Valid).file
+        assertEquals(8, file.formatVersion)
+        assertTrue(file.recurringRules.single().amountChanges)
+
+        recurring.delete(id)
+        backup.restore(file)
+
+        assertTrue(recurring.get(id)!!.amountChanges)
     }
 
     @Test

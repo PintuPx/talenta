@@ -5,8 +5,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import com.homebudget.app.data.repository.AccountRepository
+import com.homebudget.app.domain.family.ExpenseFamilyRepository
+import com.homebudget.app.domain.family.ExpensePerson
+import com.homebudget.app.domain.family.ExpensePersonTag
+import com.homebudget.app.domain.family.ExpenseTag
 import com.homebudget.app.data.repository.CategoryRepository
 import com.homebudget.app.data.repository.IntegrityException
+import com.homebudget.app.domain.monthclose.MonthLockRepository
 import com.homebudget.app.data.repository.RecurringRepository
 import com.homebudget.app.domain.model.RecurringRule
 import com.homebudget.app.domain.recurring.Recurrence
@@ -14,6 +19,7 @@ import com.homebudget.app.domain.recurring.RepeatOption
 import com.homebudget.app.data.repository.TransactionRepository
 import com.homebudget.app.data.settings.SettingsRepository
 import com.homebudget.app.domain.model.Account
+import com.homebudget.app.domain.model.AccountType
 import com.homebudget.app.domain.model.Category
 import com.homebudget.app.domain.model.CategoryKind
 import com.homebudget.app.domain.model.Transaction
@@ -33,15 +39,21 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.YearMonth
 import java.time.temporal.ChronoUnit
 import javax.inject.Inject
+
+const val ALL_FAMILY_TAG_UID = "all"
 
 data class EditFormState(
     val loading: Boolean = true,
@@ -57,6 +69,7 @@ data class EditFormState(
     val time: LocalTime = LocalTime.now().truncatedTo(ChronoUnit.MINUTES),
     val note: String = "",
     val payee: String = "",
+    val payeeSuggestions: List<String> = emptyList(),
     val errors: Map<TxField, String> = emptyMap(),
     val generalError: String? = null,
     val saving: Boolean = false,
@@ -64,14 +77,20 @@ data class EditFormState(
     val currencySymbol: String = "",
     val allAccounts: List<Account> = emptyList(),
     val allCategories: List<Category> = emptyList(),
+    val familyPeople: List<ExpensePerson> = emptyList(),
+    val familyTags: List<ExpenseTag> = emptyList(),
+    val familyTagLinks: List<ExpensePersonTag> = emptyList(),
+    val selectedFamilyMemberUids: Set<String> = emptySet(),
     /** Bill this transaction was created from; kept when the transaction is edited. */
     val billId: Long? = null,
     /** Repeating rule that added this transaction (shown as a link), if any. */
     val sourceRecurringId: Long? = null,
     /** > 0 when this form edits a repeating transaction rule rather than a transaction. */
     val recurringId: Long = 0,
+    val monthLocked: Boolean = false,
     /** Repeat choice; null = does not repeat. Always set when editing a rule. */
     val repeat: RepeatOption? = null,
+    val amountChanges: Boolean = false,
 ) {
     val isRule: Boolean get() = recurringId != 0L
     val isEdit: Boolean get() = editingId != 0L || isRule
@@ -85,6 +104,7 @@ data class EditFormState(
     /** Accounts offered in pickers: active ones plus any archived account already selected. */
     val selectableAccounts: List<Account>
         get() = allAccounts.filter { !it.archived || it.id == accountId || it.id == toAccountId }
+            .filter { type == TransactionType.TRANSFER || it.type != AccountType.INVESTMENT || it.id == accountId }
 
     /**
      * Categories offered for the current type: active main groups and active groups of active main
@@ -109,6 +129,18 @@ data class EditFormState(
         }
 }
 
+internal fun suggestPayees(payees: List<String>, query: String): List<String> {
+    val normalizedQuery = query.trim()
+    return payees
+        .filter { payee ->
+            payee.isNotBlank() &&
+                (normalizedQuery.isEmpty() || payee.contains(normalizedQuery, ignoreCase = true)) &&
+                !payee.equals(normalizedQuery, ignoreCase = true)
+        }
+        .distinctBy { it.lowercase() }
+        .take(5)
+}
+
 @HiltViewModel
 class EditTransactionViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -118,19 +150,43 @@ class EditTransactionViewModel @Inject constructor(
     categories: CategoryRepository,
     private val settings: SettingsRepository,
     private val userMessages: UserMessages,
+    private val monthLocks: MonthLockRepository,
+    private val expenseFamily: ExpenseFamilyRepository,
 ) : ViewModel() {
 
     private val route = savedStateHandle.toRoute<EditTransactionRoute>()
     private val _state = MutableStateFlow(EditFormState())
     val state: StateFlow<EditFormState> = _state.asStateFlow()
+    private var allPayees: List<String> = emptyList()
 
     private val _done = Channel<Unit>(Channel.CONFLATED)
     val done = _done.receiveAsFlow()
 
     init {
         viewModelScope.launch {
+            _state.map { YearMonth.from(it.date) }
+                .distinctUntilChanged()
+                .flatMapLatest { month -> monthLocks.observeClosed(month) }
+                .collect { closed -> _state.update { it.copy(monthLocked = closed) } }
+        }
+        viewModelScope.launch {
             combine(accounts.observeAccounts(), categories.observeCategories()) { a, c -> a to c }
                 .collect { (a, c) -> _state.update { it.copy(allAccounts = a, allCategories = c) } }
+        }
+        viewModelScope.launch {
+            combine(expenseFamily.observeActivePeople(), expenseFamily.observeActiveTags()) { people, tags ->
+                people to tags
+            }.combine(expenseFamily.observeTagLinks()) { (people, tags), links ->
+                Triple(people, tags, links)
+            }.collect { (people, tags, links) ->
+                _state.update { it.copy(familyPeople = people, familyTags = tags, familyTagLinks = links) }
+            }
+        }
+        viewModelScope.launch {
+            transactions.observePayees().collect { payees ->
+                allPayees = payees
+                _state.update { it.copy(payeeSuggestions = suggestPayees(payees, it.payee)) }
+            }
         }
         viewModelScope.launch { load(accounts) }
     }
@@ -138,7 +194,9 @@ class EditTransactionViewModel @Inject constructor(
     private suspend fun load(accounts: AccountRepository) {
         val fmt = MoneyFormatter(settings.settings.first().currencyCode)
         val accountList = accounts.observeAccounts().first()
-        val defaultAccount = accountList.firstOrNull { !it.archived }?.id
+        val defaultAccount = accountList.firstOrNull {
+            !it.archived && it.type != AccountType.INVESTMENT
+        }?.id
         if (route.recurringId > 0) {
             val rule = recurring.get(route.recurringId)
             if (rule == null) {
@@ -153,6 +211,7 @@ class EditTransactionViewModel @Inject constructor(
                     type = rule.type, amountText = Money.toEditableText(rule.amount), accountId = rule.accountId,
                     toAccountId = rule.toAccountId, categoryId = rule.categoryId, isRefund = rule.isRefund,
                     date = next.toLocalDate(), time = next.toLocalTime(), note = rule.note, payee = rule.payee,
+                    amountChanges = rule.amountChanges,
                 )
             }
             return
@@ -163,6 +222,9 @@ class EditTransactionViewModel @Inject constructor(
             _state.update { it.copy(loading = false, notFound = true) }
             return
         }
+        val sourceMemberUids = source?.let { tx ->
+            transactions.memberShares(tx.id).mapTo(linkedSetOf()) { it.personUid }
+        }.orEmpty()
         _state.update { s ->
             val base = s.copy(loading = false, fractionDigits = fmt.fractionDigits, currencySymbol = fmt.symbol)
             if (source == null) {
@@ -182,6 +244,7 @@ class EditTransactionViewModel @Inject constructor(
                     time = if (isDuplicate) LocalTime.now().truncatedTo(ChronoUnit.MINUTES) else source.occurredAt.toLocalTime(),
                     note = source.note,
                     payee = source.payee,
+                    selectedFamilyMemberUids = sourceMemberUids,
                     billId = if (isDuplicate) null else source.billId,
                     sourceRecurringId = if (isDuplicate) null else source.recurringId,
                 )
@@ -189,14 +252,25 @@ class EditTransactionViewModel @Inject constructor(
         }
     }
 
+    suspend fun historyUid(): String? =
+        _state.value.editingId.takeIf { it > 0 }?.let { transactions.uid(it) }
+
     fun setType(t: TransactionType) = _state.update { s ->
         val kind = if (t == TransactionType.INCOME) CategoryKind.INCOME else CategoryKind.EXPENSE
         val keepCategory = t != TransactionType.TRANSFER && s.category?.kind == kind
+        val accountId = if (t != TransactionType.TRANSFER && s.account?.type == AccountType.INVESTMENT) {
+            s.allAccounts.firstOrNull { !it.archived && it.type != AccountType.INVESTMENT }?.id
+        } else {
+            s.accountId
+        }
         s.copy(
             type = t,
+            accountId = accountId,
             categoryId = if (keepCategory) s.categoryId else null,
             isRefund = t == TransactionType.EXPENSE && s.isRefund,
             toAccountId = if (t == TransactionType.TRANSFER) s.toAccountId else null,
+            selectedFamilyMemberUids = if (t == TransactionType.TRANSFER) emptySet() else s.selectedFamilyMemberUids,
+            amountChanges = t == TransactionType.EXPENSE && s.amountChanges,
             errors = emptyMap(),
             generalError = null,
         )
@@ -206,12 +280,44 @@ class EditTransactionViewModel @Inject constructor(
     fun setAccount(id: Long) = _state.update { it.copy(accountId = id, errors = it.errors - TxField.ACCOUNT - TxField.TO_ACCOUNT) }
     fun setToAccount(id: Long) = _state.update { it.copy(toAccountId = id, errors = it.errors - TxField.TO_ACCOUNT) }
     fun setCategory(id: Long) = _state.update { it.copy(categoryId = id, errors = it.errors - TxField.CATEGORY) }
-    fun setRefund(r: Boolean) = _state.update { it.copy(isRefund = r) }
+    fun setRefund(r: Boolean) = _state.update {
+        it.copy(isRefund = r, amountChanges = if (r) false else it.amountChanges)
+    }
     fun setDate(d: LocalDate) = _state.update { it.copy(date = d) }
     fun setTime(t: LocalTime) = _state.update { it.copy(time = t) }
     fun setNote(n: String) = _state.update { it.copy(note = n.take(500)) }
-    fun setPayee(p: String) = _state.update { it.copy(payee = p.take(100)) }
-    fun setRepeat(r: RepeatOption?) = _state.update { s -> if (s.isRule && r == null) s else s.copy(repeat = r) }
+    fun setPayee(p: String) = _state.update {
+        val payee = p.take(100)
+        it.copy(payee = payee, payeeSuggestions = suggestPayees(allPayees, payee))
+    }
+    fun toggleFamilyMember(uid: String) = _state.update { state ->
+        val selected = if (uid in state.selectedFamilyMemberUids) {
+            state.selectedFamilyMemberUids - uid
+        } else {
+            state.selectedFamilyMemberUids + uid
+        }
+        state.copy(selectedFamilyMemberUids = selected)
+    }
+
+    fun toggleFamilyTag(tagUid: String) = _state.update { state ->
+        val memberUids = if (tagUid == ALL_FAMILY_TAG_UID) {
+            state.familyPeople.mapTo(linkedSetOf()) { it.uid }
+        } else {
+            state.familyTagLinks.filter { it.tagUid == tagUid }.mapTo(linkedSetOf()) { it.personUid }
+        }
+        val selected = if (memberUids.isNotEmpty() && state.selectedFamilyMemberUids.containsAll(memberUids)) {
+            state.selectedFamilyMemberUids - memberUids
+        } else {
+            state.selectedFamilyMemberUids + memberUids
+        }
+        state.copy(selectedFamilyMemberUids = selected)
+    }
+    fun setRepeat(r: RepeatOption?) = _state.update { s ->
+        if (s.isRule && r == null) s else s.copy(repeat = r, amountChanges = r != null && s.amountChanges)
+    }
+    fun setAmountChanges(value: Boolean) = _state.update {
+        it.copy(amountChanges = value && it.repeat != null && it.type == TransactionType.EXPENSE && !it.isRefund)
+    }
 
     fun save() {
         val s = _state.value
@@ -237,6 +343,7 @@ class EditTransactionViewModel @Inject constructor(
                             frequency = repeat.frequency,
                             interval = repeat.interval,
                             startAt = LocalDateTime.of(s.date, s.time),
+                            amountChanges = s.amountChanges,
                         )
                         val id = recurring.save(rule)
                         val next = recurring.get(id)?.let { Recurrence.nextDue(it) }
@@ -261,7 +368,8 @@ class EditTransactionViewModel @Inject constructor(
                             payee = s.payee,
                             billId = s.billId,
                             recurringId = s.sourceRecurringId,
-                        )
+                        ),
+                        memberUids = if (s.type == TransactionType.TRANSFER) emptySet() else s.selectedFamilyMemberUids,
                     )
                     userMessages.show(if (s.isEdit) "Transaction updated" else "Transaction saved")
                     _done.send(Unit)

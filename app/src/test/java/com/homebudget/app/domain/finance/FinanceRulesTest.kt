@@ -82,6 +82,18 @@ class FinanceRulesTest {
     }
 
     @Test
+    fun `invested total counts deposits from non-investment accounts only`() {
+        val investments = setOf(10L, 11L)
+        val transactions = listOf(
+            transfer(5_000, from = 2, to = 10),
+            transfer(2_000, from = 10, to = 11),
+            transfer(1_000, from = 10, to = 2),
+        )
+
+        assertEquals(5_000L, FinanceRules.investedThisPeriod(transactions, investments, novRange))
+    }
+
+    @Test
     fun `credit card purchase is expense and card payment is not counted again`() {
         val purchase = expense(300_000, account = 3, cat = 10) // bought on card
         val payment = transfer(300_000, from = 2, to = 3, t = at(20)) // paid the bill from bank
@@ -213,5 +225,29 @@ class FinanceRulesTest {
         val b = FinanceRules.accountBalances(listOf(cash), listOf(expense(10, account = 99), transfer(5, from = 99, to = 1)))
         assertEquals(50_005L, b[1])
         assertEquals(1, b.size)
+    }
+
+    @Test
+    fun investmentGainIsCurrentValueMinusContributions() {
+        assertEquals(500L, FinanceRules.investmentGain(currentValue = 3_500, contributions = 3_000))
+        assertEquals(-500L, FinanceRules.investmentGain(currentValue = 2_500, contributions = 3_000))
+        assertEquals(0L, FinanceRules.investmentGain(currentValue = 3_000, contributions = 3_000))
+        // Contributions can be negative after withdrawing more than was put in.
+        assertEquals(1_200L, FinanceRules.investmentGain(currentValue = 200, contributions = -1_000))
+        // Extremes stay exact in Long minor units.
+        assertEquals(Money.MAX_AMOUNT, FinanceRules.investmentGain(Money.MAX_AMOUNT, 0))
+        assertEquals(-Money.MAX_AMOUNT, FinanceRules.investmentGain(0, Money.MAX_AMOUNT))
+    }
+
+    @Test
+    fun investmentGainMatchesLedgerContributionsFromTransfers() {
+        val bank = Account(id = 1, name = "Bank", type = AccountType.SAVINGS, openingBalance = 10_000, includeInTotal = true, archived = false, sortOrder = 0)
+        val fund = Account(id = 2, name = "Fund", type = AccountType.INVESTMENT, openingBalance = 0, includeInTotal = true, archived = false, sortOrder = 1)
+        val contributions = FinanceRules.accountBalances(
+            listOf(bank, fund),
+            listOf(transfer(5_000, from = 1, to = 2), transfer(2_000, from = 2, to = 1)),
+        ).getValue(2)
+        assertEquals(3_000L, contributions)
+        assertEquals(500L, FinanceRules.investmentGain(3_500, contributions))
     }
 }

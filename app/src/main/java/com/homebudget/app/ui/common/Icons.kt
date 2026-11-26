@@ -106,6 +106,7 @@ fun AccountType.label(): String = when (this) {
     AccountType.SAVINGS -> "Savings account"
     AccountType.CURRENT -> "Current account"
     AccountType.CREDIT_CARD -> "Credit card"
+    AccountType.INVESTMENT -> "Investment"
     AccountType.OTHER -> "Other"
 }
 
@@ -114,5 +115,6 @@ fun AccountType.icon(): ImageVector = when (this) {
     AccountType.SAVINGS -> Icons.Filled.Savings
     AccountType.CURRENT -> Icons.Filled.AccountBalance
     AccountType.CREDIT_CARD -> Icons.Filled.CreditCard
+    AccountType.INVESTMENT -> Icons.AutoMirrored.Filled.TrendingUp
     AccountType.OTHER -> Icons.Filled.AccountBalanceWallet
 }

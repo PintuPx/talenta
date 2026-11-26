@@ -36,11 +36,21 @@ get out of step. The repository enforces these rules before every write:
 - A transfer has a different destination account and no category or refund flag.
 - An income can't be a refund.
 
+## Investment accounts
+
+- Add or withdraw investment money with a `TRANSFER`. Transfers between investment accounts do not
+  count as new contributions; transfers to investments from other account types are shown as
+  invested for the selected report period. No transfer is income or expense.
+- A saved current-value record is a valuation, not a transaction. The latest record replaces that
+  investment account's ledger balance in account and total-balance displays.
+- Gain or loss is latest current value minus the account's ledger balance (net recorded
+  contributions). Valuations never change income, expenses, refunds, budgets or category spending.
+
 ## Formulas
 
 | Quantity | Formula |
 |---|---|
-| Account balance | `openingBalance + Σ income − Σ expenses + Σ refunds − Σ transfers out + Σ transfers in` (all dates) |
+| Account balance | `openingBalance + Σ income − Σ expenses + Σ refunds − Σ transfers out + Σ transfers in` (all dates); for an investment account with a saved valuation, use its latest current value instead |
 | Total balance | Σ balances of accounts that are **not archived** and have **Include in total** on |
 | Income (period) | Σ `INCOME` amounts in the period |
 | Gross expense (period) | Σ non-refund `EXPENSE` amounts in the period |

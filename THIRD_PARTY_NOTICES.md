@@ -25,6 +25,9 @@ Talenta uses the libraries below. Every library in `gradle/libs.versions.toml` m
 | `androidx.room:room-ktx` | Apache-2.0 | Database |
 | `org.jetbrains.kotlinx:kotlinx-serialization-json` | Apache-2.0 | Backup files |
 | `org.jetbrains.kotlinx:kotlinx-coroutines-android` | Apache-2.0 | |
+| `androidx.biometric:biometric` | Apache-2.0 | AndroidX. Fingerprint / phone PIN prompt for Private mode. |
+| `org.jetbrains.kotlinx:kotlinx-coroutines-play-services` | Apache-2.0 | Awaits Google Play services tasks (sign-in). |
+| `com.google.android.gms:play-services-auth` | **Proprietary**: Android Software Development Kit License | Google sign-in and Drive authorization for family sync. Free to use but **not open source**. Used only when the user turns on family sync. |
 | `com.google.mlkit:text-recognition` | **Proprietary**: ML Kit Terms of Service and Google APIs Terms of Service | Free to use but **not open source**. Bundled on-device model, so no download is needed. Its network permissions and usage-statistics service are removed in the manifest. Because of this dependency, the app can't be listed on F-Droid. |
 
 ## Build and test only (not shipped)
