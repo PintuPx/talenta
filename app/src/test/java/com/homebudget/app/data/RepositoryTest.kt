@@ -8,6 +8,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.homebudget.app.data.backup.BackupRepository
 import com.homebudget.app.data.bill.BillImageStore
 import com.homebudget.app.data.db.AppDatabase
+import com.homebudget.app.data.db.FloatingTime
+import com.homebudget.app.data.db.TransactionEntity
 import com.homebudget.app.data.db.SeedDefaultsCallback
 import com.homebudget.app.data.repository.AccountRepository
 import com.homebudget.app.data.repository.CategoryRepository
@@ -63,6 +65,7 @@ class RepositoryTest {
     private lateinit var categories: CategoryRepository
     private lateinit var transactions: TransactionRepository
     private lateinit var images: BillImageStore
+    private lateinit var repos: TestRepositories
     private val clock = Clock.fixed(Instant.parse("2026-11-20T10:00:00Z"), ZoneOffset.UTC)
     private val dsScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -73,9 +76,10 @@ class RepositoryTest {
             .addCallback(SeedDefaultsCallback())
             .allowMainThreadQueries()
             .build()
-        accounts = AccountRepository(db, clock)
-        categories = CategoryRepository(db, clock)
-        transactions = TransactionRepository(db, clock)
+        repos = TestRepositories(db, clock)
+        accounts = repos.accounts()
+        categories = repos.categories()
+        transactions = repos.transactions()
         images = BillImageStore(context)
     }
 
@@ -124,6 +128,44 @@ class RepositoryTest {
         val t = LocalDateTime.of(2026, 3, 31, 23, 59)
         val id = transactions.save(Transaction(type = TransactionType.EXPENSE, amount = 1, accountId = cashId(), categoryId = expenseCat(), occurredAt = t))
         assertEquals(t, transactions.get(id)!!.occurredAt)
+    }
+
+    @Test
+    fun transactionDaoObservePayeesRanksAndGroupsPayees() = runTest {
+        val cash = cashId()
+        val category = expenseCat()
+        suspend fun insert(payee: String, at: LocalDateTime) {
+            db.transactionDao().insert(
+                TransactionEntity(
+                    type = TransactionType.EXPENSE,
+                    amount = 1,
+                    accountId = cash,
+                    toAccountId = null,
+                    categoryId = category,
+                    isRefund = false,
+                    occurredAt = FloatingTime.toStored(at),
+                    note = "",
+                    payee = payee,
+                    createdAt = 0,
+                    updatedAt = 0,
+                )
+            )
+        }
+
+        insert("Fresh Mart", nov10)
+        insert(" fresh mart ", nov10.plusDays(1))
+        insert("FRESH MART", nov10.plusDays(2))
+        insert("Bakery", nov10.plusDays(5))
+        insert("Bakery", nov10.plusDays(8))
+        insert("Cafe", nov10.plusDays(3))
+        insert("Cafe", nov10.plusDays(4))
+        insert("   ", nov10.plusDays(9))
+        insert("", nov10.plusDays(10))
+
+        assertEquals(
+            listOf("FRESH MART", "Bakery", "Cafe"),
+            db.transactionDao().observePayees().first(),
+        )
     }
 
     @Test
@@ -254,7 +296,7 @@ class RepositoryTest {
     fun clearAllDataRemovesEverythingAndReseeds() = runTest {
         accounts.save(Account(name = "Bank", type = AccountType.SAVINGS))
         transactions.save(Transaction(type = TransactionType.EXPENSE, amount = 5, accountId = cashId(), categoryId = expenseCat(), occurredAt = nov10))
-        DataMaintenanceRepository(db, clock, images).clearAllData()
+        repos.maintenance(images).clearAllData()
         assertTrue(transactions.observeAll().first().isEmpty())
         assertEquals(listOf("Cash"), accounts.observeAccounts().first().map { it.name })
         assertEquals(30, categories.observeCategories().first().size)
@@ -271,7 +313,7 @@ class RepositoryTest {
         val storage = MemoryStorage()
         val settings = SettingsRepository(PreferenceDataStoreFactory.create(scope = dsScope) { File(tmp.root, "test.preferences_pb") })
         settings.setCurrency("USD")
-        val backup = BackupRepository(db, storage, settings, clock, images)
+        val backup = repos.backup(storage, settings, images)
 
         val cash = cashId()
         val bank = accounts.save(Account(name = "Bank", type = AccountType.SAVINGS, openingBalance = 10_000))
@@ -300,7 +342,7 @@ class RepositoryTest {
     fun invalidBackupLeavesDatabaseUntouched() = runTest {
         val storage = MemoryStorage()
         val settings = SettingsRepository(PreferenceDataStoreFactory.create(scope = dsScope) { File(tmp.root, "t2.preferences_pb") })
-        val backup = BackupRepository(db, storage, settings, clock, images)
+        val backup = repos.backup(storage, settings, images)
         transactions.save(Transaction(type = TransactionType.EXPENSE, amount = 5, accountId = cashId(), categoryId = expenseCat(), occurredAt = nov10))
 
         storage.files["bad"] = "{\"format\":\"homebudget.backup\"}".toByteArray()

@@ -17,13 +17,15 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Paid
 import androidx.compose.material.icons.filled.PrivacyTip
 import android.content.Intent
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.compose.material.icons.filled.BugReport
 import com.homebudget.app.crash.BugReport
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Savings
 import androidx.compose.material3.Checkbox
@@ -35,6 +37,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -52,7 +55,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.homebudget.app.BuildConfig
+import com.homebudget.app.FeatureFlags
 import com.homebudget.app.data.settings.ThemeMode
+import com.homebudget.app.data.settings.AppMode
 import com.homebudget.app.domain.money.MoneyFormatter
 import com.homebudget.app.ui.common.ChoiceDialog
 import com.homebudget.app.ui.common.ConfirmDialog
@@ -60,7 +65,7 @@ import com.homebudget.app.ui.common.LoadingState
 import java.time.LocalDate
 import java.util.Currency
 
-private enum class SettingsDialog { CURRENCY, THEME, EXPORT_WARNING, CLEAR }
+private enum class SettingsDialog { CURRENCY, THEME, EXPORT_WARNING, CLEAR, PRIVATE_MODE }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,6 +74,13 @@ fun SettingsScreen(
     onOpenPrivacy: () -> Unit,
     onOpenBudgets: () -> Unit = {},
     onOpenRecurring: () -> Unit = {},
+    onOpenHistory: () -> Unit = {},
+    onOpenAdminReview: () -> Unit = {},
+    onManageFamily: () -> Unit = {},
+    onManageExpenseMembers: () -> Unit = {},
+    onOpenMonthClose: () -> Unit = {},
+    onOpenMode: () -> Unit = {},
+    onRequestPrivateMode: () -> Unit,
     vm: SettingsViewModel = hiltViewModel(),
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
@@ -95,10 +107,46 @@ fun SettingsScreen(
             SettingRow(Icons.Filled.Paid, "Currency", currencyLabel(s.currencyCode)) { dialog = SettingsDialog.CURRENCY }
             SettingRow(Icons.Filled.DarkMode, "Theme", s.themeMode.label) { dialog = SettingsDialog.THEME }
             SettingRow(Icons.Filled.Category, "Categories", "Add, edit or deactivate categories", onManageCategories)
+            ListItem(
+                leadingContent = { Icon(Icons.Filled.Lock, contentDescription = null) },
+                supportingContent = {
+                    Text(if (s.privateMode) "Only private-space data is shown" else "New entries use the shared space")
+                },
+                trailingContent = {
+                    Switch(
+                        checked = s.privateMode,
+                        onCheckedChange = { enabled ->
+                            if (enabled) dialog = SettingsDialog.PRIVATE_MODE else vm.setPrivateMode(false)
+                        },
+                    )
+                },
+            ) { Text("Private mode") }
+            ListItem(
+                leadingContent = { Icon(Icons.Filled.Lock, contentDescription = null) },
+                supportingContent = {
+                    Text(if (s.askForDeviceLock) "Confirm with fingerprint or your phone PIN" else "Private mode starts without device confirmation")
+                },
+                trailingContent = {
+                    Switch(
+                        checked = s.askForDeviceLock,
+                        onCheckedChange = vm::setAskForDeviceLock,
+                    )
+                },
+            ) { Text("Ask for device lock") }
+            if (FeatureFlags.FAMILY_SHARING) {
+                SettingRow(Icons.Filled.Info, "Mode", s.appMode.label, onOpenMode)
+            }
+            if (FeatureFlags.FAMILY_SHARING && s.appMode == AppMode.SHARED) {
+                SettingRow(Icons.Filled.Info, "Family members", "Manage members and roles on this phone", onManageFamily)
+            }
+            if (FeatureFlags.FAMILY_EXPENSES) {
+                SettingRow(Icons.Filled.Info, "Expense members and tags", "Assign income and expenses to people", onManageExpenseMembers)
+            }
 
             Section("Planning")
             SettingRow(Icons.Filled.Savings, "Budgets", "Monthly limits for all spending or per category", onOpenBudgets)
             SettingRow(Icons.Filled.Repeat, "Repeating transactions", "Rent, salary, subscriptions and EMIs", onOpenRecurring)
+            SettingRow(Icons.Filled.CalendarToday, "Month close", "Close or reopen the previous month", onOpenMonthClose)
 
             Section("Backup & restore")
             SettingRow(Icons.Filled.FileUpload, "Export backup", "Save all data to a file you choose") {
@@ -110,6 +158,10 @@ fun SettingsScreen(
 
             Section("Privacy & about")
             SettingRow(Icons.Filled.PrivacyTip, "Privacy", "How your data is handled", onOpenPrivacy)
+            SettingRow(Icons.Filled.Info, "History", "Review changes to saved entries", onOpenHistory)
+            if (FeatureFlags.FAMILY_SHARING) {
+                SettingRow(Icons.Filled.Info, "Review changes", "Approve or reject pending household changes", onOpenAdminReview)
+            }
             ListItem(
                 leadingContent = { Icon(Icons.Filled.Info, contentDescription = null) },
                 supportingContent = { Text("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})") },
@@ -117,7 +169,7 @@ fun SettingsScreen(
             val context = LocalContext.current
             BugReport.issueUrl(BuildConfig.ISSUES_URL, "Bug in ${BuildConfig.VERSION_NAME}", BugReport.body(BuildConfig.VERSION_NAME, null))?.let { url ->
                 SettingRow(Icons.Filled.BugReport, "Report a bug", "Opens the project's GitHub issues page") {
-                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri())) }
                 }
             }
 
@@ -143,6 +195,14 @@ fun SettingsScreen(
             selected = settings?.themeMode,
             label = { it.label },
             onSelect = { vm.setTheme(it); dialog = null },
+            onDismiss = { dialog = null },
+        )
+        SettingsDialog.PRIVATE_MODE -> ConfirmDialog(
+            title = "Turn on Private mode?",
+            message = "Private mode shows only this phone's private data, excludes it from shared totals and blocks screenshots. It turns off when the app goes to the background.",
+            confirmLabel = "Turn on",
+            destructive = false,
+            onConfirm = { dialog = null; onRequestPrivateMode() },
             onDismiss = { dialog = null },
         )
         SettingsDialog.EXPORT_WARNING -> ConfirmDialog(

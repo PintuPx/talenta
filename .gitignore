@@ -28,8 +28,15 @@ AGENTS.md
 .cursor/
 .cursorrules
 .github/copilot-instructions.md
+.github/prompts/
 /prompts/
 
 # Local tooling
 /app/schemas/*/*.json.bak
 *.log
+
+# Local work-in-progress notes and staged code (never committed)
+/.wip/
+
+# Windows tool crash dumps
+*.stackdump

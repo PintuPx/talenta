@@ -118,18 +118,33 @@ class GuardrailTest {
             sortedSetOf(
                 "AccountEntity", "BillEntity", "BillItemEntity", "BudgetEntity", "CategoryEntity", "ItemRuleEntity",
                 "RecurringRuleEntity", "TransactionEntity",
+                "EntityVersionEntity", "MonthLockEntity", "MemberEntity", "SyncStateEntity",
+                "FamilyPersonEntity", "FamilyTagEntity", "FamilyTagMemberEntity",
+                "TransactionMemberEntity", "InvestmentValueEntity",
             ),
             entities,
         )
-        assertEquals("Database version", 3, AppDatabase.VERSION)
-        assertEquals("Backup format version", 4, BackupFile.CURRENT_FORMAT_VERSION)
+        assertEquals("Database version", 5, AppDatabase.VERSION)
+        assertEquals("Backup format version", 8, BackupFile.CURRENT_FORMAT_VERSION)
 
         val clear = File(mainSrc, "com/homebudget/app/data/repository/Repositories.kt").readText().substringAfter("fun deleteAllRows")
-        listOf("transactionDao", "recurringDao", "billDao", "itemRuleDao", "budgetDao", "accountDao", "categoryDao").forEach {
+        // Every DAO (one or more tables each) must be cleared by clear-all, sync_state included.
+        listOf(
+            "transactionDao", "recurringDao", "billDao", "itemRuleDao", "budgetDao", "accountDao", "categoryDao",
+            "entityVersionDao", "monthLockDao", "memberDao", "syncStateDao", "familyAllocationDao", "investmentValueDao",
+        ).forEach {
             assertTrue("deleteAllRows must clear $it", clear.contains("db.$it()"))
         }
+        // familyAllocationDao owns four tables: people, tags, tag members, transaction members.
+        listOf("deleteAllTransactionMembers", "deleteAllTagMembers", "deleteAllTags", "deleteAllPeople").forEach {
+            assertTrue("deleteAllRows must call $it", clear.contains(".$it()"))
+        }
         val backup = File(mainSrc, "com/homebudget/app/data/backup/BackupRepository.kt").readText()
-        listOf("accountDao", "categoryDao", "transactionDao", "budgetDao", "billDao", "itemRuleDao", "recurringDao").forEach {
+        // sync_state (device-local sync cursors/notices) is intentionally not part of the backup file.
+        listOf(
+            "accountDao", "categoryDao", "transactionDao", "budgetDao", "billDao", "itemRuleDao", "recurringDao",
+            "entityVersionDao", "monthLockDao", "memberDao", "familyAllocationDao", "investmentValueDao",
+        ).forEach {
             assertTrue("BackupRepository must export and restore $it", Regex("""db\.$it\(\)""").findAll(backup).count() >= 2)
         }
     }

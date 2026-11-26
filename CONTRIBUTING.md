@@ -2,6 +2,11 @@
 
 Thanks for helping. Keep changes small and focused.
 
+Please follow our [Code of Conduct](CODE_OF_CONDUCT.md) in all project spaces.
+
+## Before you push
+Install the push guardrail once per clone: `git config core.hooksPath scripts/git-hooks`. It blocks pushes that contain secrets, keystores, private notes, personal emails or phone numbers, commits without a GitHub noreply email, and code that fails the unit tests. Do not bypass it with `--no-verify`.
+
 ## Ground rules
 - **Privacy first.** No network calls, analytics, ads or crash-reporting SDKs. Never log amounts, payees, notes or bill text.
 - **Money is `Long` minor units.** No floating point in money math. All totals go through `FinanceRules` ([docs/ACCOUNTING_RULES.md](docs/ACCOUNTING_RULES.md)).

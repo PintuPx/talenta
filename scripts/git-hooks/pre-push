@@ -1,0 +1,109 @@
+#!/bin/sh
+# Talenta pre-push guardrail. Blocks a push that would publish secrets, private files or
+# personal data, or code that fails the unit tests (GuardrailTest runs with them).
+#
+# Install once per clone:   git config core.hooksPath scripts/git-hooks
+# Run by hand (no push):    sh scripts/git-hooks/pre-push --check
+# Skip only the tests:      TALENTA_SKIP_TESTS=1 git push      (the other checks always run)
+#
+# Never bypass with --no-verify: fix the problem instead.
+
+ZERO=0000000000000000000000000000000000000000
+fail=0
+red() { printf '\033[31m%s\033[0m\n' "$1"; }
+ok() { printf '\033[32m%s\033[0m\n' "$1"; }
+block() { red "BLOCKED: $1"; fail=1; }
+
+# Commit ranges to check: from git's stdin on a real push, or unpushed commits with --check.
+ranges=""
+tag_objects=""
+if [ "$1" = "--check" ]; then
+    ranges="HEAD --not --remotes"
+else
+    while read -r local_ref local_sha remote_ref remote_sha; do
+        [ "$local_sha" = "$ZERO" ] && continue                      # deleting a remote branch
+        [ "$(git cat-file -t "$local_sha" 2>/dev/null)" = "tag" ] && tag_objects="$tag_objects $local_sha"
+        if [ "$remote_sha" = "$ZERO" ]; then
+            ranges="$ranges
+$local_sha --not --remotes"
+        else
+            ranges="$ranges
+$remote_sha..$local_sha"
+        fi
+    done
+fi
+[ -z "$(echo "$ranges" | tr -d '[:space:]')" ] && { ok "Nothing to push."; exit 0; }
+
+commits=$(echo "$ranges" | while read -r r; do [ -n "$r" ] && git rev-list $r; done | sort -u)
+[ -z "$commits" ] && [ -z "$tag_objects" ] && { ok "No new commits."; exit 0; }
+echo "Talenta guardrail: checking $(echo "$commits" | wc -l | tr -d ' ') commit(s)..."
+
+# 1. Author and committer emails must be private (GitHub noreply).
+for c in $commits; do
+    for e in $(git show -s --format='%ae%n%ce' "$c" | sort -u); do
+        case "$e" in
+            *@users.noreply.github.com) ;;
+            *) block "commit $(git rev-parse --short "$c") uses email '$e' (use your GitHub noreply address: git config user.email)";;
+        esac
+    done
+done
+
+# 1b. Annotated tags carry their own tagger email; it must be private too.
+for t in $tag_objects; do
+    e=$(git cat-file -p "$t" | sed -n 's/^tagger .*<\([^>]*\)>.*/\1/p')
+    case "$e" in
+        ''|*@users.noreply.github.com) ;;
+        *) block "tag $(git cat-file -p "$t" | sed -n 's/^tag //p') uses tagger email '$e' (recreate it after: git config user.email <noreply>)";;
+    esac
+done
+
+# 2. Files that must never be published.
+files=$(for c in $commits; do git diff-tree --no-commit-id --name-only -r --diff-filter=AM "$c"; done | sort -u)
+echo "$files" | grep -iE '(\.jks|\.keystore|\.p12|\.pem|\.key)$|(^|/)keystore\.properties$|(^|/)local\.properties$|(^|/)google-services\.json$|(^|/)\.env|(^|/)client_secret.*\.json$|(^|/)CLAUDE\.md$|^\.claude/|^\.wip/|^\.github/copilot-instructions\.md$|^\.github/prompts/|\.(db|sqlite)$|^backups?/' |
+while read -r f; do [ -n "$f" ] && echo "$f"; done > /tmp/talenta-badfiles.$$ 2>/dev/null
+if [ -s /tmp/talenta-badfiles.$$ ]; then
+    while read -r f; do block "private file in push: $f"; done < /tmp/talenta-badfiles.$$
+    fail=1
+fi
+rm -f /tmp/talenta-badfiles.$$
+
+# 3. Secrets and personal data in added lines.
+added=$(for c in $commits; do git show --format= --unified=0 "$c" -- . ':(exclude)scripts/git-hooks/pre-push' | grep -E '^\+[^+]'; done)
+check() { # $1 = description, $2 = extended regex
+    hits=$(echo "$added" | grep -nE -- "$2" | head -3)
+    [ -n "$hits" ] && { block "$1"; echo "$hits" | cut -c1-160; }
+}
+check "private key"                   '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+check "Google API key"                'AIza[0-9A-Za-z_-]{35}'
+check "Google OAuth client secret"    'GOCSPX-[0-9A-Za-z_-]{20,}'
+check "GitHub token"                  '(ghp|gho|ghs|ghu|github_pat)_[0-9A-Za-z_]{20,}'
+check "AWS key"                       'AKIA[0-9A-Z]{16}'
+check "password/secret in code"       '(password|passwd|secret|api[_-]?key|storePassword|keyPassword)[[:space:]]*[:=][[:space:]]*"[^"$]{6,}"'
+# Any email address (personal OR work) is blocked; only placeholders and GitHub noreply are allowed.
+emails=$(echo "$added" | grep -noE -- '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' |
+    grep -viE '(^|:)(this|super)@|@(users\.)?noreply\.github\.com$|@example\.(com|org|net)$|\.(invalid|test|example)$' | head -3)
+[ -n "$emails" ] && { block "email address in file content (use a placeholder or GitHub noreply)"; echo "$emails" | cut -c1-160; }
+check "phone number"                  '\+91[ -]?[6-9][0-9]{4}[ -]?[0-9]{5}([^0-9]|$)'
+
+if [ $fail -ne 0 ]; then
+    red "Push stopped by the Talenta guardrail. Fix the items above, then push again."
+    exit 1
+fi
+ok "Secrets, private files and emails: OK."
+
+# 4. Unit tests (includes GuardrailTest: no network permission, no logging, no trackers, licenses).
+if [ "$TALENTA_SKIP_TESTS" = "1" ]; then
+    red "Unit tests SKIPPED (TALENTA_SKIP_TESTS=1)."
+    exit 0
+fi
+root=$(git rev-parse --show-toplevel)
+# Prefer the project JDK 17 when present (an older JAVA_HOME, e.g. JDK 8, cannot run Gradle).
+for jdk in "$HOME/android-toolchain/jdk17" "/c/Users/$USERNAME/android-toolchain/jdk17"; do
+    [ -d "$jdk/bin" ] && { export JAVA_HOME="$jdk"; break; }
+done
+echo "Running unit tests (set TALENTA_SKIP_TESTS=1 to skip)..."
+cd "$root" || exit 1
+# Git hooks run in Git's POSIX shell on every OS, so the shell wrapper works on Windows too.
+./gradlew testDebugUnitTest -q || { red "Unit tests failed: push stopped."; exit 1; }
+ok "Unit tests passed. Pushing."
+exit 0

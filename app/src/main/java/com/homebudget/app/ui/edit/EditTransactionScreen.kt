@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -31,6 +32,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +53,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,10 +62,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.homebudget.app.domain.model.AccountType
+import com.homebudget.app.domain.family.equalShares
+import com.homebudget.app.domain.money.AmountParseResult
+import com.homebudget.app.domain.money.AmountParser
 import com.homebudget.app.domain.model.TransactionType
+import com.homebudget.app.FeatureFlags
 import com.homebudget.app.domain.validation.TxField
 import com.homebudget.app.ui.common.CategoryBadge
 import com.homebudget.app.ui.common.CategoryIcons
@@ -72,8 +80,10 @@ import com.homebudget.app.ui.common.ConfirmDialog
 import com.homebudget.app.ui.common.DateFormats
 import com.homebudget.app.ui.common.EmptyState
 import com.homebudget.app.ui.common.LoadingState
+import com.homebudget.app.ui.common.LocalMoneyFormatter
 import com.homebudget.app.ui.common.SelectField
 import com.homebudget.app.ui.common.icon
+import com.homebudget.app.ui.monthclose.LockedMonthNotice
 import com.homebudget.app.ui.theme.LocalFinanceColors
 import com.homebudget.app.ui.transactions.typeLabel
 import java.time.Instant
@@ -88,9 +98,11 @@ fun EditTransactionScreen(
     onManageCategories: () -> Unit,
     onOpenBill: (Long) -> Unit,
     onOpenRecurring: (Long) -> Unit = {},
+    onOpenHistory: (String) -> Unit = {},
     vm: EditTransactionViewModel = hiltViewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
     var confirmDelete by remember { mutableStateOf(false) }
     LaunchedEffect(vm) { vm.done.collect { onDone() } }
 
@@ -115,6 +127,9 @@ fun EditTransactionScreen(
                             Icon(Icons.Filled.Delete, contentDescription = "Delete repeating transaction")
                         }
                     } else if (state.isEdit) {
+                        TextButton(onClick = {
+                            scope.launch { vm.historyUid()?.let(onOpenHistory) }
+                        }) { Text("History") }
                         IconButton(onClick = { onDuplicate(state.editingId) }) {
                             Icon(Icons.Filled.ContentCopy, contentDescription = "Duplicate transaction")
                         }
@@ -139,8 +154,9 @@ fun EditTransactionScreen(
                     onType = vm::setType, onAmount = vm::setAmount, onAccount = vm::setAccount,
                     onToAccount = vm::setToAccount, onCategory = vm::setCategory, onRefund = vm::setRefund,
                     onDate = vm::setDate, onTime = vm::setTime, onNote = vm::setNote, onPayee = vm::setPayee,
+                    onToggleFamilyMember = vm::toggleFamilyMember, onToggleFamilyTag = vm::toggleFamilyTag,
                     onSave = vm::save, onManageCategories = onManageCategories, onOpenBill = onOpenBill,
-                    onRepeat = vm::setRepeat, onOpenRecurring = onOpenRecurring,
+                    onRepeat = vm::setRepeat, onAmountChanges = vm::setAmountChanges, onOpenRecurring = onOpenRecurring,
                 ),
                 modifier = Modifier.padding(padding),
             )
@@ -170,10 +186,13 @@ data class EditFormActions(
     val onTime: (LocalTime) -> Unit = {},
     val onNote: (String) -> Unit = {},
     val onPayee: (String) -> Unit = {},
+    val onToggleFamilyMember: (String) -> Unit = {},
+    val onToggleFamilyTag: (String) -> Unit = {},
     val onSave: () -> Unit = {},
     val onManageCategories: () -> Unit = {},
     val onOpenBill: (Long) -> Unit = {},
     val onRepeat: (RepeatOption?) -> Unit = {},
+    val onAmountChanges: (Boolean) -> Unit = {},
     val onOpenRecurring: (Long) -> Unit = {},
 )
 
@@ -191,6 +210,9 @@ fun EditTransactionForm(state: EditFormState, actions: EditFormActions, modifier
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (state.monthLocked) {
+            LockedMonthNotice(monthLabel = state.date.month.name.lowercase().replaceFirstChar { it.uppercase() })
+        }
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             TransactionType.entries.forEachIndexed { i, t ->
                 SegmentedButton(
@@ -251,7 +273,7 @@ fun EditTransactionForm(state: EditFormState, actions: EditFormActions, modifier
             Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        if (state.type == TransactionType.EXPENSE) {
+        if (state.type == TransactionType.EXPENSE && !state.isRefund) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -304,6 +326,19 @@ fun EditTransactionForm(state: EditFormState, actions: EditFormActions, modifier
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (FeatureFlags.CHANGING_BILL_AMOUNTS && state.type == TransactionType.EXPENSE) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Amount changes")
+                        Text(
+                            "Ask for the amount each time this bill is due.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = state.amountChanges, onCheckedChange = actions.onAmountChanges)
+                    }
+                }
             }
         }
 
@@ -313,8 +348,78 @@ fun EditTransactionForm(state: EditFormState, actions: EditFormActions, modifier
                 onValueChange = actions.onPayee,
                 label = { Text(if (state.type == TransactionType.INCOME) "Payer (optional)" else "Payee / merchant (optional)") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().testTag("payee"),
             )
+            if (state.payeeSuggestions.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    state.payeeSuggestions.take(5).forEach { suggestion ->
+                        AssistChip(
+                            onClick = { actions.onPayee(suggestion) },
+                            label = { Text(suggestion) },
+                        )
+                    }
+                }
+            }
+        }
+        if (state.type != TransactionType.TRANSFER && !state.isRule && state.familyPeople.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("For (optional)", style = MaterialTheme.typography.titleSmall)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val allSelected = state.selectedFamilyMemberUids.containsAll(state.familyPeople.map { it.uid })
+                    FilterChip(
+                        selected = allSelected,
+                        onClick = { actions.onToggleFamilyTag(ALL_FAMILY_TAG_UID) },
+                        label = { Text("All") },
+                    )
+                    state.familyTags.forEach { tag ->
+                        val tagMembers = state.familyTagLinks.filter { it.tagUid == tag.uid }.map { it.personUid }.toSet()
+                        FilterChip(
+                            selected = tagMembers.isNotEmpty() && state.selectedFamilyMemberUids.containsAll(tagMembers),
+                            onClick = { actions.onToggleFamilyTag(tag.uid) },
+                            label = { Text(tag.name) },
+                        )
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    state.familyPeople.forEach { person ->
+                        FilterChip(
+                            selected = person.uid in state.selectedFamilyMemberUids,
+                            onClick = { actions.onToggleFamilyMember(person.uid) },
+                            label = { Text(person.name) },
+                        )
+                    }
+                }
+                val selected = state.familyPeople.filter { it.uid in state.selectedFamilyMemberUids }
+                val total = (AmountParser.parse(state.amountText, state.fractionDigits) as? AmountParseResult.Valid)?.minor
+                val hasRemovedMembers = state.selectedFamilyMemberUids.any { selectedPerson ->
+                    state.familyPeople.none { it.uid == selectedPerson }
+                }
+                if (hasRemovedMembers) {
+                    Text(
+                        "A removed member's share is kept on this entry.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else if (selected.isNotEmpty() && total != null) {
+                    val shares = equalShares(total, selected.size)
+                    val formatter = LocalMoneyFormatter.current
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Equal split preview", style = MaterialTheme.typography.labelLarge)
+                        selected.forEachIndexed { index, person ->
+                            Text("${person.name}: ${formatter.format(shares[index])}")
+                        }
+                        Text("Shares total ${formatter.format(shares.sum())}.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
         OutlinedTextField(
             value = state.note,

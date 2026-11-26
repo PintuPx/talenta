@@ -10,7 +10,7 @@ import java.time.YearMonth
  */
 enum class TransactionType { INCOME, EXPENSE, TRANSFER }
 
-enum class AccountType { CASH, SAVINGS, CURRENT, CREDIT_CARD, OTHER }
+enum class AccountType { CASH, SAVINGS, CURRENT, CREDIT_CARD, INVESTMENT, OTHER }
 
 enum class CategoryKind { INCOME, EXPENSE }
 
@@ -163,4 +163,6 @@ data class RecurringRule(
     val active: Boolean = true,
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
+    /** Due expenses wait for the user to enter each occurrence's amount. */
+    val amountChanges: Boolean = false,
 )

@@ -69,6 +69,7 @@ class BillRepositoryTest {
     private lateinit var context: Context
     private lateinit var db: AppDatabase
     private lateinit var images: BillImageStore
+    private lateinit var repos: TestRepositories
     private lateinit var bills: BillRepository
     private lateinit var transactions: TransactionRepository
     private lateinit var categories: CategoryRepository
@@ -89,9 +90,10 @@ class BillRepositoryTest {
             .build()
         images = BillImageStore(context)
         images.deleteAllExcept(emptySet())
-        bills = BillRepository(db, clock, images, fakeRecognizer)
-        transactions = TransactionRepository(db, clock)
-        categories = CategoryRepository(db, clock)
+        repos = TestRepositories(db, clock)
+        bills = BillRepository(db, clock, images, fakeRecognizer, repos.writer, repos.expenseFamily)
+        transactions = repos.transactions()
+        categories = repos.categories()
     }
 
     @After
@@ -102,7 +104,7 @@ class BillRepositoryTest {
 
     private suspend fun cats(): List<Category> = categories.observeCategories().first()
     private suspend fun cat(name: String) = cats().first { it.name == name }.id
-    private suspend fun cashId() = AccountRepository(db, clock).observeAccounts().first().first().id
+    private suspend fun cashId() = repos.accounts().observeAccounts().first().first().id
     private val billDate = LocalDateTime.of(2026, 11, 18, 19, 5)
 
     private suspend fun storePhoto(): String {
@@ -157,6 +159,25 @@ class BillRepositoryTest {
         bills.approve(bill, listOf(BillItem(position = 0, description = "Veggie", amount = 4_000, categoryId = veg)))
         bills.approve(bill, listOf(BillItem(position = 0, description = "Veggie", amount = 4_500, categoryId = veg)))
         assertEquals(listOf(4_500L), transactions.observeAll().first().map { it.amount })
+    }
+
+    @Test
+    fun onlyThisTimePreservesLearnedGroupWhileAlwaysUpdatesIt() = runTest {
+        val id = bills.createDraft(null, cashId())
+        val vegetables = cat("Vegetables")
+        val dining = cat("Dining")
+        val bill = bills.get(id)!!.copy(billDate = billDate)
+        val key = com.homebudget.app.domain.bill.CategorySuggester.key("Veggie")
+        val original = BillItem(position = 0, description = "Veggie", amount = 4_000, categoryId = vegetables)
+        val changed = original.copy(categoryId = dining)
+
+        bills.approve(bill, listOf(original))
+        bills.approve(bill, listOf(changed), preserveLearnedKeys = setOf(key))
+        assertEquals(vegetables, bills.learnedRules()[key])
+        assertEquals(dining, transactions.getForBill(id).single().categoryId)
+
+        bills.approve(bill, listOf(changed))
+        assertEquals(dining, bills.learnedRules()[key])
     }
 
     @Test
@@ -242,7 +263,7 @@ class BillRepositoryTest {
     fun backupRoundTripKeepsBillsGroupsAndRules() = runTest {
         val storage = MemoryStorage()
         val settings = SettingsRepository(PreferenceDataStoreFactory.create(scope = dsScope) { File(tmp.root, "b.preferences_pb") })
-        val backup = BackupRepository(db, storage, settings, clock, images)
+        val backup = repos.backup(storage, settings, images)
         val photo = storePhoto()
         val id = bills.createDraft(photo, cashId())
         bills.approve(bills.get(id)!!.copy(merchant = "Fresh Mart", billDate = billDate), listOf(BillItem(position = 0, description = "Veggie", amount = 4_000, categoryId = cat("Vegetables"))))
@@ -251,7 +272,7 @@ class BillRepositoryTest {
 
         backup.exportTo("f")
         val file = (backup.inspect("f") as BackupDecodeResult.Valid).file
-        assertEquals(4, file.formatVersion) // bump deliberately when the backup format changes
+        assertEquals(8, file.formatVersion) // bump deliberately when the backup format changes
         assertEquals(1, file.bills.size)
         assertEquals(1, file.billItems.size)
         assertEquals(1, file.itemRules.size)
@@ -273,7 +294,7 @@ class BillRepositoryTest {
     fun phase1BackupWithoutBillFieldsStillRestores() = runTest {
         val storage = MemoryStorage()
         val settings = SettingsRepository(PreferenceDataStoreFactory.create(scope = dsScope) { File(tmp.root, "c.preferences_pb") })
-        val backup = BackupRepository(db, storage, settings, clock, images)
+        val backup = repos.backup(storage, settings, images)
         val v1 = """
             {"format":"homebudget.backup","formatVersion":1,"exportedAtEpochMillis":1,"currencyCode":"INR",
              "accounts":[{"id":1,"name":"Cash","type":"CASH","openingBalance":0,"includeInTotal":true,"archived":false,"sortOrder":0,"createdAt":1,"updatedAt":1}],
@@ -294,7 +315,7 @@ class BillRepositoryTest {
         val id = bills.createDraft(null, cashId())
         bills.approve(bills.get(id)!!.copy(billDate = billDate), listOf(BillItem(position = 0, description = "Veggie", amount = 4_000, categoryId = cat("Vegetables"))))
         val settings = SettingsRepository(PreferenceDataStoreFactory.create(scope = dsScope) { File(tmp.root, "d.preferences_pb") })
-        val snapshot = BackupRepository(db, MemoryStorage(), settings, clock, images).createSnapshot()
+        val snapshot = repos.backup(MemoryStorage(), settings, images).createSnapshot()
         assertNull(BackupValidator.validate(snapshot))
         assertNotNull(BackupValidator.validate(snapshot.copy(bills = emptyList())))
         assertNotNull(BackupValidator.validate(snapshot.copy(billItems = snapshot.billItems.map { it.copy(categoryId = cat("Salary")) })))

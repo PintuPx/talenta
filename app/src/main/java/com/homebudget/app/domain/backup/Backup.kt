@@ -29,12 +29,23 @@ data class BackupFile(
     val inventoryItems: List<BackupInventoryItem> = emptyList(),
     val purchaseRequests: List<BackupPurchaseRequest> = emptyList(),
     val proposals: List<BackupProposal> = emptyList(),
+    /** v5. */
+    val entityVersions: List<BackupEntityVersion> = emptyList(),
+    val monthLocks: List<BackupMonthLock> = emptyList(),
+    val members: List<BackupMember> = emptyList(),
+    /** v6. Expense attribution is separate from the household sign-in roster. */
+    val familyPeople: List<BackupFamilyPerson> = emptyList(),
+    val familyTags: List<BackupFamilyTag> = emptyList(),
+    val familyTagMembers: List<BackupFamilyTagMember> = emptyList(),
+    val transactionMembers: List<BackupTransactionMember> = emptyList(),
+    /** v7. */
+    val investmentValues: List<BackupInvestmentValue> = emptyList(),
 ) {
     companion object {
         const val FORMAT_ID = "homebudget.backup"
 
-        /** 1: Phase 1. 2: adds category groups, bills, bill items and learned item rules. 3: adds recurring rules. 4: adds inventory items, purchase requests and proposals. */
-        const val CURRENT_FORMAT_VERSION = 4
+        /** 1: Phase 1. 2: bill data. 3: recurring rules. 4: staged inventory/proposals. 5: v4 history. 6: family expense attribution. 7: investment values. 8: changing recurring amounts. */
+        const val CURRENT_FORMAT_VERSION = 8
     }
 }
 
@@ -43,6 +54,9 @@ data class BackupAccount(
     val id: Long, val name: String, val type: String, val openingBalance: Long,
     val includeInTotal: Boolean, val archived: Boolean, val sortOrder: Int,
     val createdAt: Long, val updatedAt: Long,
+    /** v5. Empty in older formats; assigned during restore. */
+    val uid: String = "",
+    val isPrivate: Boolean = false,
 )
 
 @Serializable
@@ -51,6 +65,8 @@ data class BackupCategory(
     val sortOrder: Int, val active: Boolean, val createdAt: Long, val updatedAt: Long,
     /** v2: main group id for a group. */
     val parentId: Long? = null,
+    /** v5. Empty in older formats; assigned during restore. */
+    val uid: String = "",
 )
 
 @Serializable
@@ -64,10 +80,20 @@ data class BackupTransaction(
     val billId: Long? = null,
     /** v3. */
     val recurringId: Long? = null,
+    /** v5. Empty in older formats; assigned during restore. */
+    val uid: String = "",
+    val isPrivate: Boolean = false,
 )
 
 @Serializable
-data class BackupBudget(val id: Long, val month: Int, val categoryId: Long? = null, val limitAmount: Long)
+data class BackupBudget(
+    val id: Long,
+    val month: Int,
+    val categoryId: Long? = null,
+    val limitAmount: Long,
+    val uid: String = "",
+    val isPrivate: Boolean = false,
+)
 
 @Serializable
 data class BackupBill(
@@ -76,12 +102,17 @@ data class BackupBill(
     val billDate: String,
     val total: Long? = null, val accountId: Long? = null, val imageFile: String? = null, val ocrText: String? = null,
     val status: String, val createdAt: Long, val updatedAt: Long,
+    /** v5. Empty in older formats; assigned during restore. */
+    val uid: String = "",
+    val isPrivate: Boolean = false,
 )
 
 @Serializable
 data class BackupBillItem(
     val id: Long, val billId: Long, val position: Int, val description: String, val amount: Long,
     val categoryId: Long? = null, val included: Boolean = true,
+    /** v5. Empty in older formats; assigned during restore. */
+    val uid: String = "",
 )
 
 @Serializable
@@ -93,6 +124,11 @@ data class BackupRecurringRule(
     /** Floating local date-time in ISO-8601 of the first occurrence. */
     val startAt: String,
     val postedCount: Int, val active: Boolean, val createdAt: Long, val updatedAt: Long,
+    /** v5. Empty in older formats; assigned during restore. */
+    val uid: String = "",
+    val isPrivate: Boolean = false,
+    /** v8. */
+    val amountChanges: Boolean = false,
 )
 
 @Serializable
@@ -115,7 +151,106 @@ data class BackupProposal(
 )
 
 @Serializable
-data class BackupItemRule(val key: String, val categoryId: Long, val useCount: Int, val updatedAt: Long)
+data class BackupItemRule(
+    val key: String,
+    val categoryId: Long,
+    val useCount: Int,
+    val updatedAt: Long,
+    val uid: String = "",
+)
+
+@Serializable
+data class BackupEntityVersion(
+    val id: Long = 0,
+    val entityType: String,
+    val entityUid: String,
+    val version: Int,
+    val status: String,
+    val baseVersion: Int,
+    val kind: String,
+    val deleted: Boolean,
+    val snapshot: String,
+    val snapshotFormat: Int,
+    val authorId: String,
+    val authorName: String,
+    val createdAt: Long,
+    val decidedBy: String? = null,
+    val decidedAt: Long? = null,
+    val decisionNote: String? = null,
+    val bulkId: String? = null,
+    val isPrivate: Boolean = false,
+    val eventUid: String,
+    val archived: Boolean = false,
+)
+
+@Serializable
+data class BackupMonthLock(
+    val month: Int,
+    val closedAt: Long,
+    val closedBy: String,
+)
+
+@Serializable
+data class BackupMember(
+    val memberId: String,
+    val email: String,
+    val name: String,
+    val role: String,
+    val active: Boolean,
+    val appVersionCode: Int,
+    val appVersionName: String,
+    val syncFormat: Int,
+    val lastSeenAt: Long? = null,
+)
+
+@Serializable
+data class BackupFamilyPerson(
+    val id: Long,
+    val name: String,
+    val active: Boolean,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val uid: String,
+)
+
+@Serializable
+data class BackupFamilyTag(
+    val id: Long,
+    val name: String,
+    val active: Boolean,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val uid: String,
+)
+
+@Serializable
+data class BackupFamilyTagMember(
+    val id: Long,
+    val tagUid: String,
+    val personUid: String,
+    val createdAt: Long,
+    val uid: String,
+)
+
+@Serializable
+data class BackupTransactionMember(
+    val id: Long,
+    val transactionUid: String,
+    val personUid: String,
+    val shareAmount: Long,
+    val isPrivate: Boolean,
+    val uid: String,
+)
+
+@Serializable
+data class BackupInvestmentValue(
+    val id: Long,
+    val accountUid: String,
+    val valueMinor: Long,
+    val recordedAt: Long,
+    val isPrivate: Boolean,
+    val uid: String,
+)
 
 /** Result of decoding + validating a backup file. Nothing touches the database until this is Valid. */
 sealed interface BackupDecodeResult {

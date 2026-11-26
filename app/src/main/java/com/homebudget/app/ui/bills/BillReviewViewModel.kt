@@ -11,11 +11,13 @@ import com.homebudget.app.data.repository.CategoryRepository
 import com.homebudget.app.data.repository.IntegrityException
 import com.homebudget.app.data.settings.SettingsRepository
 import com.homebudget.app.domain.bill.BillSplit
+import com.homebudget.app.domain.bill.CategorySuggester
 import com.homebudget.app.domain.bill.SplitGroup
 import com.homebudget.app.domain.model.Account
 import com.homebudget.app.domain.model.Bill
 import com.homebudget.app.domain.model.BillItem
 import com.homebudget.app.domain.model.BillStatus
+import com.homebudget.app.domain.bill.SensitiveInfo
 import com.homebudget.app.domain.model.Category
 import com.homebudget.app.domain.model.CategoryKind
 import com.homebudget.app.domain.money.AmountParseResult
@@ -23,6 +25,7 @@ import com.homebudget.app.domain.money.AmountParser
 import com.homebudget.app.domain.money.Money
 import com.homebudget.app.domain.money.MoneyFormatter
 import com.homebudget.app.ui.common.UserMessages
+import com.homebudget.app.ui.common.UserMessage
 import com.homebudget.app.ui.navigation.BillRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -64,6 +67,11 @@ data class BillReviewState(
     val totalText: String = "",
     val lines: List<BillLineUi> = emptyList(),
     val ocrText: String? = null,
+    val sensitiveKinds: Set<SensitiveInfo.Kind> = emptySet(),
+    val learnedCategories: Map<String, Long> = emptyMap(),
+    val preserveLearnedKeys: Set<String> = emptySet(),
+    val pendingCategoryChange: PendingCategoryChange? = null,
+    val pendingPastCategoryChange: PendingPastCategoryChange? = null,
     val reading: Boolean = false,
     val readMessage: String? = null,
     val dirty: Boolean = false,
@@ -122,6 +130,20 @@ data class BillReviewState(
     val isPosted: Boolean get() = status == BillStatus.POSTED
 }
 
+data class PendingCategoryChange(
+    val lineKey: Long,
+    val categoryId: Long,
+    val itemDescription: String,
+    val learnedCategoryId: Long,
+)
+
+data class PendingPastCategoryChange(
+    val itemDescription: String,
+    val previousCategoryId: Long,
+    val categoryId: Long,
+    val foundEntries: Int,
+)
+
 @HiltViewModel
 class BillReviewViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -158,6 +180,7 @@ class BillReviewViewModel @Inject constructor(
             return
         }
         val items = bills.items(billId)
+        val learnedCategories = bills.learnedRules()
         val txCount = if (bill.status == BillStatus.POSTED) bills.transactionCount(billId) else 0
         _state.update {
             it.copy(
@@ -170,7 +193,9 @@ class BillReviewViewModel @Inject constructor(
                 accountId = bill.accountId,
                 totalText = bill.total?.let(Money::toEditableText) ?: "",
                 lines = items.map { item -> item.toLine() },
-                ocrText = bill.ocrText,
+                ocrText = bill.ocrText?.let(SensitiveInfo::mask),
+                sensitiveKinds = bill.ocrText?.let(SensitiveInfo::find).orEmpty(),
+                learnedCategories = learnedCategories,
                 transactionCount = txCount,
                 fractionDigits = fmt.fractionDigits,
                 currencySymbol = fmt.symbol,
@@ -198,6 +223,7 @@ class BillReviewViewModel @Inject constructor(
                         totalText = r.total?.let(Money::toEditableText) ?: s.totalText,
                         lines = reading.items.map { item -> item.toLine().copy(suggested = item.categoryId != null) },
                         ocrText = r.text,
+                        sensitiveKinds = reading.sensitiveKinds,
                         dirty = true,
                         readMessage = when {
                             reading.items.isEmpty() && r.text.isBlank() ->
@@ -234,7 +260,117 @@ class BillReviewViewModel @Inject constructor(
 
     fun setDescription(key: Long, v: String) = editLine(key) { it.copy(description = v.take(BillRepository.MAX_DESCRIPTION)) }
     fun setAmount(key: Long, v: String) = editLine(key) { it.copy(amountText = v.take(20)) }
-    fun setCategory(key: Long, id: Long) = editLine(key) { it.copy(categoryId = id, suggested = false) }
+    fun setCategory(key: Long, id: Long) {
+        val s = _state.value
+        val line = s.lines.firstOrNull { it.key == key } ?: return
+        if (line.categoryId == id) return
+        val learnedCategoryId = s.learnedCategories[CategorySuggester.key(line.description)]
+        if (learnedCategoryId != null && learnedCategoryId != id) {
+            _state.update {
+                it.copy(
+                    pendingCategoryChange = PendingCategoryChange(key, id, line.description, learnedCategoryId),
+                )
+            }
+        } else {
+            editLine(key) { it.copy(categoryId = id, suggested = false) }
+        }
+    }
+
+    fun resolveCategoryChange(always: Boolean) {
+        val state = _state.value
+        val pending = state.pendingCategoryChange ?: return
+        val line = state.lines.firstOrNull { it.key == pending.lineKey } ?: run {
+            _state.update { it.copy(pendingCategoryChange = null) }
+            return
+        }
+        val key = CategorySuggester.key(line.description)
+        if (!always) {
+            edit {
+                it.copy(
+                    lines = it.lines.map { current ->
+                        if (current.key == pending.lineKey) current.copy(categoryId = pending.categoryId, suggested = false)
+                        else current
+                    },
+                    preserveLearnedKeys = it.preserveLearnedKeys + key,
+                    pendingCategoryChange = null,
+                )
+            }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(saving = true) }
+            try {
+                bills.rememberCategory(line.description, pending.categoryId)
+                val foundEntries = bills.countPastCategoryMatches(line.description, pending.categoryId, excludeBillId = billId)
+                edit {
+                    it.copy(
+                        lines = it.lines.map { current ->
+                            if (current.key == pending.lineKey) current.copy(categoryId = pending.categoryId, suggested = false)
+                            else current
+                        },
+                        learnedCategories = it.learnedCategories + (key to pending.categoryId),
+                        pendingCategoryChange = null,
+                        pendingPastCategoryChange = if (foundEntries > 0) {
+                            PendingPastCategoryChange(
+                                itemDescription = line.description,
+                                previousCategoryId = pending.learnedCategoryId,
+                                categoryId = pending.categoryId,
+                                foundEntries = foundEntries,
+                            )
+                        } else {
+                            null
+                        },
+                    )
+                }
+            } catch (e: IntegrityException) {
+                messages.show(e.message ?: "Could not update the learned group")
+            } finally {
+                _state.update { it.copy(saving = false) }
+            }
+        }
+    }
+
+    fun cancelPastCategoryChange() = _state.update { it.copy(pendingPastCategoryChange = null) }
+
+    fun resolvePastCategoryChange() {
+        val pending = _state.value.pendingPastCategoryChange ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(saving = true) }
+            try {
+                val result = bills.changePastCategories(
+                    pending.itemDescription,
+                    pending.categoryId,
+                    previousCategoryId = pending.previousCategoryId,
+                    excludeBillId = billId,
+                )
+                val bulk = result.writeResult
+                val message = when {
+                    result.skippedClosedMonths > 0 && bulk.pendingApproval > 0 ->
+                        "Change request sent for ${result.changedEntries} past entries; ${result.skippedClosedMonths} in closed months skipped."
+                    result.skippedClosedMonths > 0 ->
+                        "${result.changedEntries} changed, ${result.skippedClosedMonths} in closed months skipped. Only the Admin can change those."
+                    bulk.pendingApproval > 0 -> "Change request sent for ${result.changedEntries} past entries."
+                    else -> "Changed ${result.changedEntries} past entries."
+                }
+                val undoAction = if (bulk.applied > 0 || bulk.pendingApproval > 0) {
+                    suspend {
+                        bills.undoPastCategoryChange(bulk.bulkId)
+                        Unit
+                    }
+                } else {
+                    null
+                }
+                messages.show(UserMessage(message, if (undoAction == null) null else "Undo", undoAction))
+                _state.update { it.copy(pendingPastCategoryChange = null, dirty = true) }
+            } catch (e: IntegrityException) {
+                messages.show(e.message ?: "Could not change past entries")
+            } finally {
+                _state.update { it.copy(saving = false) }
+            }
+        }
+    }
+
+    fun cancelCategoryChange() = _state.update { it.copy(pendingCategoryChange = null) }
     fun setIncluded(key: Long, v: Boolean) = editLine(key) { it.copy(included = v) }
     fun removeLine(key: Long) = edit { s -> s.copy(lines = s.lines.filter { it.key != key }) }
 
@@ -291,7 +427,7 @@ class BillReviewViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(saving = true) }
             try {
-                val n = bills.approve(currentBill(s), s.items)
+                val n = bills.approve(currentBill(s), s.items, s.preserveLearnedKeys)
                 messages.show(
                     if (s.isPosted) "Bill updated: $n ${if (n == 1) "expense" else "expenses"}"
                     else "Added $n ${if (n == 1) "expense" else "expenses"} from the bill"

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.homebudget.app.data.repository.AccountRepository
 import com.homebudget.app.data.repository.IntegrityException
+import com.homebudget.app.domain.investment.InvestmentRepository
 import com.homebudget.app.domain.finance.FinanceRules
 import com.homebudget.app.domain.model.Account
 import com.homebudget.app.domain.model.AccountType
@@ -24,7 +25,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-data class AccountWithBalance(val account: Account, val balance: Long)
+data class AccountWithBalance(
+    val account: Account,
+    val balance: Long,
+    val currentValueMinor: Long? = null,
+    val contributionsBalance: Long = balance,
+)
 
 data class AccountsUiState(
     val loading: Boolean = true,
@@ -54,11 +60,25 @@ data class AccountEditorState(
 @HiltViewModel
 class AccountsViewModel @Inject constructor(
     private val repository: AccountRepository,
+    private val investments: InvestmentRepository,
     private val userMessages: UserMessages,
 ) : ViewModel() {
 
-    val state: StateFlow<AccountsUiState> = combine(repository.observeAccounts(), repository.observeBalances()) { accounts, balances ->
-        val rows = accounts.map { AccountWithBalance(it, balances[it.id] ?: it.openingBalance) }
+    val state: StateFlow<AccountsUiState> = combine(
+        repository.observeAccounts(),
+        repository.observeBalances(),
+        repository.observeLedgerBalances(),
+        investments.observeLatestValues(),
+    ) { accounts, balances, ledgerBalances, values ->
+        val latestValues = values.associateBy { it.accountId }
+        val rows = accounts.map { account ->
+            AccountWithBalance(
+                account,
+                balances[account.id] ?: account.openingBalance,
+                latestValues[account.id]?.valueMinor,
+                ledgerBalances[account.id] ?: account.openingBalance,
+            )
+        }
         AccountsUiState(
             loading = false,
             active = rows.filter { !it.account.archived },
@@ -90,7 +110,11 @@ class AccountsViewModel @Inject constructor(
         val e = _editor.value ?: return
         val nameError = if (e.name.isBlank()) "Enter a name" else null
         val parsed = AmountParser.parseSigned(e.openingText)
-        val openingError = (parsed as? AmountParseResult.Valid)?.let { null } ?: TransactionValidator.amountError(parsed, 2)
+        val openingError = when {
+            parsed !is AmountParseResult.Valid -> TransactionValidator.amountError(parsed, 2)
+            e.type == AccountType.INVESTMENT && parsed.minor < 0 -> "Investment contributions cannot start below zero."
+            else -> null
+        }
         if (nameError != null || openingError != null) {
             _editor.value = e.copy(nameError = nameError, openingError = openingError)
             return
@@ -115,8 +139,27 @@ class AccountsViewModel @Inject constructor(
                 _editor.value = null
                 userMessages.show("Account deleted")
             } else {
-                userMessages.show("This account has transactions. Archive it instead to hide it.")
+                userMessages.show("This account has saved records. Archive it instead to hide it.")
             }
         }
+    }
+
+    fun saveInvestmentValue(accountId: Long, valueText: String, fractionDigits: Int): Boolean {
+        val parsed = AmountParser.parse(valueText, fractionDigits)
+        val valid = (parsed as? AmountParseResult.Valid)?.minor
+            ?.takeIf { it in 0L..Money.MAX_AMOUNT }
+        if (valid == null) {
+            userMessages.show("Enter a valid investment value.")
+            return false
+        }
+        viewModelScope.launch {
+            try {
+                investments.recordValue(accountId, valid)
+                userMessages.show("Investment value saved")
+            } catch (e: IntegrityException) {
+                userMessages.show(e.message ?: "Could not save investment value.")
+            }
+        }
+        return true
     }
 }

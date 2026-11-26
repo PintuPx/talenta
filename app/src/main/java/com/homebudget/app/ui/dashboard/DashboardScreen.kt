@@ -66,6 +66,7 @@ import com.homebudget.app.ui.common.LoadingState
 import com.homebudget.app.ui.common.LocalMoneyFormatter
 import com.homebudget.app.ui.common.MonthSelector
 import com.homebudget.app.ui.common.TransactionRow
+import com.homebudget.app.ui.monthclose.MonthCloseReminderBanner
 import com.homebudget.app.ui.theme.LocalFinanceColors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,6 +79,7 @@ fun DashboardScreen(
     onScanBill: () -> Unit,
     onOpenBills: () -> Unit,
     onOpenBudgets: () -> Unit = {},
+    onOpenMonthClose: () -> Unit = {},
     vm: DashboardViewModel = hiltViewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -98,6 +100,9 @@ fun DashboardScreen(
             ) {
                 item {
                     BalanceCard(state.totalBalance, onOpenAccounts, Modifier.padding(horizontal = 16.dp))
+                }
+                item {
+                    MonthCloseReminderBanner(onOpenMonthClose, Modifier.padding(horizontal = 16.dp))
                 }
                 item {
                     QuickActions(onAddTransaction, Modifier.padding(horizontal = 16.dp))

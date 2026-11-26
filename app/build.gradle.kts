@@ -114,6 +114,9 @@ dependencies {
     // On-device bill text recognition. Bundled model: works offline, nothing is downloaded.
     implementation(libs.mlkit.text.recognition)
     implementation(libs.androidx.exifinterface)
+    implementation(libs.androidx.biometric)
+    implementation(libs.play.services.auth)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     // JVM tests (run on this machine, including Robolectric-based Room and Compose tests)
     testImplementation(libs.junit)

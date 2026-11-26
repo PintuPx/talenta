@@ -71,9 +71,9 @@ object Recurrence {
     }
 
     /** The transaction a rule adds for the occurrence at [at]. */
-    fun toTransaction(rule: RecurringRule, at: LocalDateTime): Transaction = Transaction(
+    fun toTransaction(rule: RecurringRule, at: LocalDateTime, amount: Long = rule.amount): Transaction = Transaction(
         type = rule.type,
-        amount = rule.amount,
+        amount = amount,
         accountId = rule.accountId,
         toAccountId = if (rule.type == TransactionType.TRANSFER) rule.toAccountId else null,
         categoryId = if (rule.type == TransactionType.TRANSFER) null else rule.categoryId,

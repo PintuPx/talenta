@@ -34,6 +34,8 @@ data class SyncEvent(
     /** For upsert/delete: the row key (id or key) as text. */
     val key: String? = null,
     val data: JsonElement? = null,
+    /** Entity-version uid, or a stable control-event uid. */
+    val eventUid: String? = null,
 ) {
     companion object {
         /** Admin: a row was added or changed. data = the row. */
@@ -46,6 +48,11 @@ data class SyncEvent(
         const val PROPOSAL = "proposal"
         /** Admin: a proposal was approved or rejected. data = DecisionMessage. */
         const val DECISION = "decision"
+        /** One shared EntityVersion row. */
+        const val VERSION = "version"
+        const val ROSTER = "roster"
+        const val HOUSEHOLD_END = "household_end"
+        const val BULK_SKIPPED = "bulk_skipped"
     }
 }
 
@@ -53,7 +60,13 @@ data class SyncEvent(
 data class Segment(val partition: String, val month: String, val events: List<SyncEvent>)
 
 @Serializable
-data class RosterMember(val memberId: String, val email: String, val name: String, val role: String) {
+data class RosterMember(
+    val memberId: String,
+    val email: String,
+    val name: String,
+    val role: String,
+    val maxSyncFormat: Int = 1,
+) {
     fun toEntry() = RosterEntry(memberId, email, name, Role.valueOf(role))
 
     companion object {
@@ -77,6 +90,12 @@ data class MemberFile(
     val consumed: Map<String, Long> = emptyMap(),
     val lastSyncAt: Long = 0,
     val appVersion: String = "",
+    val appVersionCode: Int = 0,
+    val appVersionName: String = appVersion,
+    val maxSyncFormat: Int = 1,
+    val releaseLabel: String = "Good to have",
+    val whatsNew: String = "",
+    val deviceId: String = "",
     /** Admin only. */
     val roster: List<RosterMember> = emptyList(),
     /** Admin only: offset the snapshot was taken at; -1 when none. */
@@ -136,12 +155,51 @@ object SyncNames {
     fun segment(id: String, month: String) = "log-$id-$month.enc"
     fun month(epochMillis: Long): String = YearMonth.from(Instant.ofEpochMilli(epochMillis).atOffset(ZoneOffset.UTC)).toString()
 
-    private val MEMBER = Regex("^member-([a-z0-9]{1,32})\\.enc$")
+    private val MEMBER = Regex("^member-([a-z0-9-]{1,36})\\.enc$")
     fun memberIdOf(fileName: String): String? = MEMBER.matchEntire(fileName)?.groupValues?.get(1)
 
-    /** Member ids are short lowercase alphanumerics so they are safe inside file names. */
-    fun isValidMemberId(id: String) = Regex("^[a-z0-9]{1,32}$").matches(id)
+    /** UUID member ids and older short ids are safe to use in Drive file names. */
+    fun isValidMemberId(id: String) =
+        Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$").matches(id) ||
+            Regex("^[a-z0-9]{1,32}$").matches(id)
+
+    /**
+     * Month of each event, never moving backwards when the device clock does, so each segment has
+     * one consecutive range of offsets.
+     */
+    fun assignMonths(events: List<SyncEvent>): Map<Long, String> {
+        val out = LinkedHashMap<Long, String>()
+        var last = ""
+        events.sortedBy { it.offset }.forEach { event ->
+            val current = month(event.at).let { if (it < last) last else it }
+            out[event.offset] = current
+            last = current
+        }
+        return out
+    }
 }
+
+/** JSON-safe representation of one shared row from entity_versions. */
+@Serializable
+data class VersionSyncEvent(
+    val entityType: String,
+    val entityUid: String,
+    val version: Int,
+    val status: String,
+    val baseVersion: Int,
+    val kind: String,
+    val deleted: Boolean,
+    val snapshot: String,
+    val snapshotFormat: Int,
+    val authorId: String,
+    val authorName: String,
+    val createdAt: Long,
+    val decidedBy: String? = null,
+    val decidedAt: Long? = null,
+    val decisionNote: String? = null,
+    val bulkId: String? = null,
+    val eventUid: String,
+)
 
 object SyncJson {
     val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
